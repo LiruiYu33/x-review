@@ -51,6 +51,13 @@ function harness(overrides = {}) {
     mutateProof:fn=>probeHook=fn,proof:()=>proof,setProof:value=>proof=value};
 }
 const hasTarget=h=>h.stored.reviewData.records.some(record=>record.key===h.original.key);
+async function updateProfileTab(h,pathname,change={}){
+  h.tab.url='https://x.com'+pathname;h.page.url=h.tab.url;
+  // The background onUpdated listener deliberately does not return its async
+  // service task. Give that event a turn to settle before asserting its state.
+  h.events.updated(11,{url:h.tab.url,...change},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+}
 test('manual unfollow opens one native popup and only verified transition deletes the target atomically',async()=>{
   const h=harness();await h.begin();assert(hasTarget(h));assert.equal(h.windows[0].type,'popup');assert.equal(h.windows[0].url,'https://x.com/target');
   await h.send({type:'UNFOLLOW_BEGIN',key:h.original.key});assert.equal(h.windows.length,1);
@@ -226,6 +233,36 @@ test('closing, cancelling, reloading, timing out or restarting never deletes',as
     assert.equal(h.stored.manualUnfollow.phase,'cancelled',action);await h.observe('confirmed');assert(hasTarget(h),action);
   }
 });
+for(const profilePath of ['/target/with_replies','/target/reposts','/target/media','/target/media/?view=grid']){
+  test('the armed watcher stays bound on the same profile tab '+profilePath+' and closes after saved removal',async()=>{
+    const h=harness();const run=await h.begin();
+    assert.equal((await h.observe('following')).data.phase,'armed');
+    await updateProfileTab(h,profilePath);
+    assert.equal(h.stored.manualUnfollow.phase,'armed');assert(hasTarget(h));
+    const done=await h.observe('confirmed');
+    assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');assert.equal(hasTarget(h),false);
+    assert.equal(h.closes.length,1);assert.equal(h.closes[0].tabId,run.tabId);
+    assert.equal(h.closes[0].stored.manualUnfollowUndo.record.key,h.original.key);
+  });
+}
+test('an already unfollowed account can be reconciled from its Videos tab',async()=>{
+  const h=harness();await h.begin();await updateProfileTab(h,'/target/media');
+  const done=await h.observe('reconcile');
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+  assert.equal(hasTarget(h),false);assert.equal(h.closes.length,1);
+});
+test('a full document reload still stops an armed watcher on the same profile tab',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  await updateProfileTab(h,'/target/reposts',{status:'loading'});
+  assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));assert.equal(h.closes.length,0);
+});
+for(const destination of ['/target/following','/target/status/123','/target/photo','/target/about','/target/media/123','/other/media','/i/user/123']){
+  test('the armed watcher stops on a non-profile-tab destination '+destination,async()=>{
+    const h=harness();await h.begin();await h.observe('following');
+    await updateProfileTab(h,destination);
+    assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));assert.equal(h.closes.length,0);
+  });
+}
 test('revoking optional access prevents deletion and makes status terminal',async()=>{
   const h=harness();await h.begin();await h.observe('following');h.permission(false);
   assert.equal((await h.observe('confirmed')).ok,false);assert(hasTarget(h));
@@ -245,6 +282,23 @@ test('numeric ID records require matching native button identity and handle if k
   assert.equal((await h.observe('following',{handle:'resolved',id:'999'})).ok,false);
   assert.equal((await h.observe('following',{handle:'resolved',id:'123'})).data.phase,'armed');
   assert.equal((await h.observe('confirmed',{handle:'resolved',id:'123'})).data.phase,'removed');
+});
+test('an ID-only record stays bound to its first resolved handle across profile tabs',async()=>{
+  const h=harness({id:'123',handle:undefined});h.tab.url='https://x.com/resolved';h.page.url=h.tab.url;await h.begin();
+  assert.equal((await h.observe('following',{handle:'resolved',id:'123'})).data.phase,'armed');
+  await updateProfileTab(h,'/resolved/with_replies');
+  assert.equal(h.stored.manualUnfollow.phase,'armed');assert(hasTarget(h));
+  await updateProfileTab(h,'/impostor/reposts');
+  assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));assert.equal(h.closes.length,0);
+});
+test('an ID-only record can be verified and closed on its resolved handle profile tab',async()=>{
+  const h=harness({id:'123',handle:undefined});h.tab.url='https://x.com/resolved';h.page.url=h.tab.url;await h.begin();
+  assert.equal((await h.observe('following',{handle:'resolved',id:'123'})).data.phase,'armed');
+  await updateProfileTab(h,'/resolved/media');
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  const done=await h.observe('confirmed',{handle:'resolved',id:'123'});
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+  assert.equal(hasTarget(h),false);assert.equal(h.closes.length,1);
 });
 test('a conflicting known numeric identity prevents deletion of a handle-only record',async()=>{
   const h=harness();h.stored.reviewData.records.push(core.normaliseRecord({handle:'target',id:'999'}));await h.begin();

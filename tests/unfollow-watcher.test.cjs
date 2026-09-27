@@ -338,6 +338,115 @@ for (const [label, change] of [
   });
 }
 
+for (const [label, pathname] of [
+  ['Posts', '/FableBirch'], ['Replies', '/FableBirch/with_replies'],
+  ['Reposts', '/FableBirch/reposts'], ['Videos', '/FableBirch/media']
+]) {
+  test('the same-account ' + label + ' tab supports arming and a verified manual unfollow', async () => {
+    const h = harness(); h.location.pathname = pathname;
+    await h.start(); assert.equal(h.state().phase, 'armed');
+    assert.equal(h.proof().handle, 'fablebirch'); assert.equal(h.proof().id, '123');
+    await h.confirm(); await h.setFollowing(false); await h.advance(499);
+    assert.deepEqual(h.observations().map(message => message.phase), ['following']);
+    await h.advance(1);
+    assert.equal(h.state().phase, 'removed');
+    assert.deepEqual(h.observations().map(message => message.phase), ['following', 'confirmed']);
+    const proof = h.observations().at(-1).proof;
+    assert.equal(proof.trustedAction, true); assert.equal(proof.stableFor, 500);
+    assert.equal(proof.handle, 'fablebirch'); assert.equal(proof.viewer, 'localowner');
+    assert.equal(h.messages.some(message => message.type === 'UNFOLLOW_WATCH_STOPPED'), false);
+  });
+}
+
+test('armed monitoring survives same-account tab transitions and reconciles Follow on the final tab', async () => {
+  const h = harness(); await h.start();
+  for (const pathname of ['/FableBirch/with_replies/', '/fablebirch/reposts', '/FableBirch/', '/FableBirch/media/']) {
+    h.location.pathname = pathname; h.location.search = '?lang=en'; h.location.hash = '#profile';
+    await h.change(); await h.advance(250);
+    assert.equal(h.state().phase, 'armed', pathname);
+    assert.equal(h.proof().state, 'following', pathname);
+    assert.deepEqual(h.observations().map(message => message.phase), ['following'], 'Tab changes do not create a new session');
+  }
+  await h.setFollowing(false); await h.advance(1999);
+  assert.equal(h.observations().length, 1);
+  await h.advance(1);
+  assert.equal(h.state().phase, 'removed');
+  const observed = h.observations().at(-1);
+  assert.equal(observed.phase, 'reconcile'); assert.equal(observed.proof.stableFor, 2000);
+  assert.equal(observed.proof.trustedAction, false);
+  assert.equal(observed.proof.observationKind, 'already-not-following');
+  assert.equal(h.messages.some(message => message.type === 'UNFOLLOW_WATCH_STOPPED'), false);
+});
+
+test('a same-account tab redraw pauses evidence until its bound profile controls return', async () => {
+  const h = harness(); await h.start();
+  h.location.pathname = '/FableBirch/media'; h.name.hidden = true; h.button.hidden = true;
+  await h.change(); await h.advance(1000);
+  assert.equal(h.state().phase, 'armed'); assert.equal(h.proof().state, 'unknown');
+  assert.equal(h.observations().length, 1);
+  h.name.hidden = false; h.button.hidden = false; await h.change();
+  assert.equal(h.state().phase, 'armed'); assert.equal(h.proof().state, 'following');
+  await h.confirm(); await h.setFollowing(false); await h.advance(500);
+  assert.equal(h.state().phase, 'removed'); assert.equal(h.observations().at(-1).phase, 'confirmed');
+});
+
+test('a confirmed Follow observation remains bound to the same account when switching profile tabs', async () => {
+  const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false);
+  await h.advance(250); h.location.pathname = '/FableBirch/reposts'; await h.change();
+  assert.equal(h.state().phase, 'armed'); assert.equal(h.proof().state, 'follow');
+  assert.equal(h.proof().trustedAction, true); assert.equal(h.observations().length, 1);
+  await h.advance(500);
+  assert.equal(h.state().phase, 'removed'); assert.equal(h.observations().at(-1).phase, 'confirmed');
+  assert.equal(h.observations().at(-1).proof.id, '123');
+});
+
+test('a direct verification after a profile-tab switch resets the complete 500-millisecond stability window', async () => {
+  const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false);
+  await h.advance(250); assert.equal(h.proof().stableFor, 250);
+  h.location.pathname = '/FableBirch/media';
+  // The service can request proof before a mutation callback or timer tick.
+  const fresh = h.proof();
+  assert.equal(fresh.state, 'follow'); assert.equal(fresh.trustedAction, true);
+  assert.equal(fresh.stableFor, 0, 'Do not reuse stability from the previous profile tab');
+  assert.equal(h.observations().length, 1);
+  await h.change(); await h.advance(499);
+  assert.equal(h.state().phase, 'armed'); assert.equal(h.observations().length, 1);
+  assert.equal(h.proof().stableFor, 499);
+  await h.advance(1);
+  assert.equal(h.state().phase, 'removed');
+  assert.equal(h.observations().at(-1).phase, 'confirmed');
+  assert.equal(h.observations().at(-1).proof.stableFor, 500);
+});
+
+test('non-profile and foreign-account routes still terminate an armed session without a removal report', async () => {
+  for (const pathname of [
+    '/TidalFox', '/TidalFox/with_replies', '/TidalFox/reposts', '/TidalFox/media',
+    '/FableBirch/following', '/FableBirch/status/123', '/FableBirch/status/123/video/1',
+    '/FableBirch/about', '/FableBirch/unknown', '/FableBirch/media/extra', '/FableBirch//media'
+  ]) {
+    const h = harness(); await h.start(); await h.confirm();
+    h.location.pathname = pathname; await h.change(); await h.setFollowing(false); await h.advance(2500);
+    assert.equal(h.state().phase, 'stopped', pathname);
+    assert.equal(h.proof().trustedAction, false, pathname);
+    assert.deepEqual(h.observations().map(message => message.phase), ['following'], pathname);
+    assert.equal(h.messages.filter(message => message.type === 'UNFOLLOW_WATCH_STOPPED').length, 1, pathname);
+  }
+});
+
+test('profile-tab suffixes do not permit a non-X origin, insecure protocol, custom port or URL credentials', async () => {
+  for (const url of [
+    'https://example.test/FableBirch/media', 'http://x.com/FableBirch/reposts',
+    'https://x.com:444/FableBirch/with_replies', 'https://fixture@x.com/FableBirch/media',
+    'https://:fixture@x.com/FableBirch/reposts'
+  ]) {
+    const h = harness(); await h.start(); await h.confirm();
+    h.location.href = url; await h.change(); await h.setFollowing(false); await h.advance(2500);
+    assert.equal(h.state().phase, 'stopped', url);
+    assert.deepEqual(h.observations().map(message => message.phase), ['following'], url);
+    assert.equal(h.proof().trustedAction, false, url);
+  }
+});
+
 test('an unreadable armed page remains recoverable before the existing ten-minute session deadline', async () => {
   const h = harness(); await h.start(); await h.confirm(); h.button.remove(); await h.change();
   await h.advance(31000);

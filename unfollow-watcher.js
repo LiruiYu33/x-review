@@ -61,8 +61,11 @@
       identifiable: Boolean(numeric || (labelAction && addressedHandle === handle))};
   }
   function route() {
-    if (location.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(location.hostname) || location.port) return '';
-    return handleOf(location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]);
+    const url = new URL(location.href);
+    if (url.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(url.hostname)
+      || url.port || url.username || url.password) return '';
+    // X keeps the same native profile header on these four profile tabs.
+    return handleOf(url.pathname.match(/^\/([A-Za-z0-9_]{1,15})(?:\/(?:with_replies|reposts|media))?\/?$/)?.[1]);
   }
   function viewerEvidence() {
     const handles = [...document.querySelectorAll('[data-testid="AppTabBar_Profile_Link"]')].filter(rendered).map(node => {
@@ -87,6 +90,7 @@
     const conflict = reason => ({...unknown, conflict: true, reason});
     if (identity.conflict || (owner && run.viewer && owner !== run.viewer)) return conflict('登录账户证据不一致，本地记录未删除。');
     if ((handle && run.targetHandle && handle !== run.targetHandle) || (handle && run.handle && handle !== run.handle)) return conflict('主页地址与目标账户不一致，本地记录未删除。');
+    trackProfilePath(run, handle);
     if (!handle || blocked()) return unknown;
     const root = document.querySelector('main [data-testid="primaryColumn"],main[data-testid="primaryColumn"],main');
     if (!root) return unknown;
@@ -142,6 +146,17 @@
   }
   function clearIntent(run) { run.intent = null; run.followSince = 0; run.unknownSince = 0; }
   function resetReconciliation(run) { run.reconcileSince = 0; }
+  function trackProfilePath(run, handle) {
+    if (!handle) return;
+    if (run.profilePath && run.profilePath !== location.pathname) {
+      // Same-document tab navigation may preserve DOM nodes. Never carry a
+      // stability interval from one profile tab into another. A trusted X
+      // action remains bound to this same account, viewer and document.
+      run.followSince = 0; run.unknownSince = 0;
+      resetReconciliation(run); run.awaitingEvidence = true;
+    }
+    run.profilePath = location.pathname;
+  }
   function trustedIntent(run) {
     return Boolean(run.intent && Date.now() - run.intent.at <= INTENT_MS
       && (!run.intent.dialogSeen || run.intent.confirmed));
@@ -213,6 +228,7 @@
   }
   function clicked(run, event) {
     if (!active(run) || !run.armed || !event.isTrusted || document.hidden || run.busy) return;
+    trackProfilePath(run, route());
     const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     const button = target?.closest('button,[role="button"]');
     const dialog = button?.closest(DIALOGS);
@@ -260,6 +276,7 @@
     if (run.identityConflict) return end(run, 'stopped', run.identityConflictReason || '账户身份发生变化或存在冲突，本地记录未删除。');
     if (Date.now() - run.startedAt > MAX_MS) return end(run, 'stopped', '检测已超时，本地记录未删除。请从工作台重新打开。');
     if (run.handle && route() !== run.handle) return end(run, 'stopped', '已离开目标账户主页，本地记录未删除。');
+    trackProfilePath(run, route());
     const identity = viewerEvidence(), owner = identity.handle;
     if (identity.conflict) return end(run, 'stopped', '登录账户证据不一致，本地记录未删除。');
     if (run.viewer && owner && owner !== run.viewer) return end(run, 'stopped', '当前登录账户已改变，本地记录未删除。');
