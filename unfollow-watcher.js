@@ -23,6 +23,40 @@
     return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
   }
   const textOf = node => String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim();
+  function actionState(value) {
+    if (/^(?:unfollow|following|取消关注|取消關注|正在关注|正在關注|已关注|已關注)$/i.test(value)) return 'following';
+    if (/^(?:follow|关注|關注)$/i.test(value)) return 'follow';
+    return '';
+  }
+  function controlEvidence(button, handle) {
+    const label = String(button.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    const text = textOf(button), numeric = (button.getAttribute('data-testid') || '').match(/^(\d+)-(unfollow|follow)$/);
+    const addressed = label.match(/^(.+?)\s+@([A-Za-z0-9_]{1,15})$/);
+    const pending = /^(?:requested|pending|follow request (?:pending|sent)|cancel (?:follow )?request(?: to)?|已请求|已請求|请求中|請求中|取消(?:关注|關注)?请求|取消(?:关注|關注)?請求)$/i;
+    // A pending request is not a not-following observation. During redraw X
+    // may update visible text before its accessible label (or vice versa).
+    if (pending.test(text) || pending.test(addressed ? addressed[1] : label)) {
+      return {button, state: '', id: '', conflict: false, pending: true};
+    }
+    const labelAction = actionState(addressed ? addressed[1] : label), textAction = actionState(text);
+    const subscription = /^(?:subscribe(?:d)?(?: to)?|订阅(?: 到| 至)?|訂閱(?: 到| 至)?|已订阅|已訂閱)$/i;
+    const subscriptionLabel = subscription.test(addressed ? addressed[1] : label);
+    const paid = subscriptionLabel || subscription.test(text);
+    const addressedHandle = addressed ? handleOf(addressed[2]) : '';
+    // X uses a numeric "-unfollow" test ID on its paid Subscribe button too.
+    // It can establish identity only when explicitly addressed to this profile;
+    // it can never establish a following relationship or a trusted native action.
+    if (paid) return {button, state: '', id: numeric && subscriptionLabel && addressedHandle === handle ? numeric[1] : '',
+      conflict: Boolean(labelAction || textAction || (numeric && addressedHandle && addressedHandle !== handle))};
+    const state = labelAction || textAction;
+    if (!state) return {button, state: '', id: '', conflict: false};
+    const suffixState = numeric ? (numeric[2] === 'unfollow' ? 'following' : 'follow') : '';
+    return {button, state, id: numeric ? numeric[1] : '', conflict: Boolean(
+      (addressedHandle && addressedHandle !== handle) || (labelAction && textAction && labelAction !== textAction)
+      || (suffixState && suffixState !== state)),
+      // An icon-only control needs an explicit target-bound action label.
+      identifiable: Boolean(numeric || (labelAction && addressedHandle === handle))};
+  }
   function route() {
     if (location.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(location.hostname) || location.port) return '';
     return handleOf(location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]);
@@ -47,33 +81,41 @@
   function read(run) {
     const handle = route(), identity = viewerEvidence(), owner = identity.handle;
     const unknown = {handle, id: '', viewer: owner, state: 'unknown', button: null, conflict: false};
-    const conflict = {...unknown, conflict: true};
-    if (identity.conflict || (handle && run.targetHandle && handle !== run.targetHandle)
-      || (handle && run.handle && handle !== run.handle) || (owner && run.viewer && owner !== run.viewer)) return conflict;
+    const conflict = reason => ({...unknown, conflict: true, reason});
+    if (identity.conflict || (owner && run.viewer && owner !== run.viewer)) return conflict('登录账户证据不一致，本地记录未删除。');
+    if ((handle && run.targetHandle && handle !== run.targetHandle) || (handle && run.handle && handle !== run.handle)) return conflict('主页地址与目标账户不一致，本地记录未删除。');
     if (!handle || blocked()) return unknown;
     const root = document.querySelector('main [data-testid="primaryColumn"],main[data-testid="primaryColumn"],main');
     if (!root) return unknown;
     const names = [...root.querySelectorAll('[data-testid="UserName"]')].filter(node => !node.closest(EXCLUDED) && visible(node));
     // A single visible profile identity prevents recommendation or stale-page attribution.
-    if (names.length !== 1) return names.length > 1 ? conflict : unknown;
+    if (names.length !== 1) return names.length > 1 ? conflict('页面显示多个账户标题，本地记录未删除。') : unknown;
     const namedHandles = new Set([...textOf(names[0]).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
-    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict : unknown;
+    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict('账户标题与主页地址不一致，本地记录未删除。') : unknown;
     const name = names[0], boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
-    const buttons = [...root.querySelectorAll('[data-testid$="-unfollow"],[data-testid$="-follow"]')].filter(node => {
-      if (!visible(node) || node.closest(EXCLUDED) || !node.matches('button,[role="button"]')) return false;
+    const buttons = [...root.querySelectorAll('button,[role="button"]')].filter(node => {
+      if (!visible(node) || node.closest(EXCLUDED)) return false;
       if (boundary && !(node.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
       const rect = node.getBoundingClientRect(), nameRect = name.getBoundingClientRect();
       return Math.abs(rect.top - nameRect.top) < 600;
     });
-    if (buttons.length !== 1) return buttons.length > 1 ? conflict : unknown;
+    const controls = buttons.map(button => controlEvidence(button, handle));
+    if (controls.some(control => control.conflict)) return conflict('关注控件的账户或状态证据不一致，本地记录未删除。');
+    if (controls.some(control => control.pending)) return unknown;
+    const relations = controls.filter(control => control.state);
+    if (relations.length !== 1) return relations.length > 1 ? conflict('页面显示多个关注控件，本地记录未删除。') : unknown;
+    const selected = relations[0], button = selected.button;
+    if (!selected.identifiable) return unknown;
     // A native request still in progress cannot establish a stable follow state.
-    if (buttons[0].getAttribute('disabled') !== null || buttons[0].getAttribute('aria-disabled') === 'true'
-      || buttons[0].getAttribute('aria-busy') === 'true') return unknown;
-    const match = buttons[0].getAttribute('data-testid').match(/^(\d+)-(unfollow|follow)$/);
-    if (!match) return unknown;
-    if ((run.targetId && match[1] !== run.targetId) || (run.id && match[1] !== run.id)) return conflict;
+    if (button.getAttribute('disabled') !== null || button.getAttribute('aria-disabled') === 'true'
+      || button.getAttribute('aria-busy') === 'true') return unknown;
+    const ids = new Set(controls.map(control => control.id).filter(Boolean));
+    if (ids.size > 1) return conflict('账户数字 ID 证据不一致，本地记录未删除。');
+    if (!ids.size) return unknown;
+    const id = [...ids][0];
+    if ((run.targetId && id !== run.targetId) || (run.id && id !== run.id)) return conflict('账户数字 ID 与本地目标不一致，本地记录未删除。');
     if (!owner) return unknown;
-    return {handle, id: match[1], viewer: owner, state: match[2] === 'unfollow' ? 'following' : 'follow', button: buttons[0]};
+    return {handle, id, viewer: owner, state: selected.state, button};
   }
   function dialogs() { return [...document.querySelectorAll(DIALOGS)].filter(visible); }
   function expectedDialog(run, node) {
@@ -95,7 +137,7 @@
     const run = current;
     if (!run) return {state: 'unknown', trustedAction: false, stableFor: 0};
     const state = read(run);
-    if (state.conflict) { clearIntent(run); run.identityConflict = true; }
+    if (state.conflict) { clearIntent(run); run.identityConflict = true; run.identityConflictReason = state.reason; }
     const observable = active(run) && !run.identityConflict && state.state === 'follow' && !document.hidden && !dialogs().length;
     if (!observable) { run.followSince = 0; resetReconciliation(run); }
     const eligible = observable && run.armed && trustedIntent(run) && !run.unknownSince;
@@ -123,7 +165,9 @@
     host.setAttribute('aria-label', t('X Review 手动取消关注'));
     title.textContent = t('X Review · 手动取消关注');
     status.textContent = t(run.reason);
-    detail.textContent = t('等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。');
+    detail.textContent = t(['stopped', 'failed'].includes(run.phase)
+      ? '检测已结束，继续等待不会更新记录。请回到工作台重新打开此账户以核实当前状态；无需重新关注。'
+      : '等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。');
     detail.hidden = ['removed', 'retained'].includes(run.phase) || run.reconcileSince > 0;
     close.textContent = t(active(run) ? '停止检测' : '关闭提示');
   }
@@ -169,7 +213,7 @@
     const state = read(run);
     if (state.state === 'unknown') {
       clearIntent(run);
-      if (state.conflict) end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+      if (state.conflict) end(run, 'stopped', state.reason || '账户身份发生变化或存在冲突，本地记录未删除。');
       return;
     }
     if (button === state.button && state.state === 'following' && !dialogs().length) {
@@ -179,11 +223,11 @@
   }
   async function tick(run) {
     if (!active(run) || run.busy) return;
-    if (run.identityConflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+    if (run.identityConflict) return end(run, 'stopped', run.identityConflictReason || '账户身份发生变化或存在冲突，本地记录未删除。');
     if (Date.now() - run.startedAt > MAX_MS) return end(run, 'stopped', '检测已超时，本地记录未删除。请从工作台重新打开。');
     if (run.handle && route() !== run.handle) return end(run, 'stopped', '已离开目标账户主页，本地记录未删除。');
     const owner = viewer();
-    if (viewerEvidence().conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+    if (viewerEvidence().conflict) return end(run, 'stopped', '登录账户证据不一致，本地记录未删除。');
     if (run.viewer && owner && owner !== run.viewer) return end(run, 'stopped', '当前登录账户已改变，本地记录未删除。');
     if (blocked()) return end(run, 'stopped', 'X 显示登录、验证或错误提示，本地记录未删除。');
     if (document.hidden) { run.followSince = 0; resetReconciliation(run); return; }
@@ -198,7 +242,7 @@
     const state = read(run);
     if (state.state === 'unknown') {
       run.followSince = 0; resetReconciliation(run);
-      if (state.conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+      if (state.conflict) return end(run, 'stopped', state.reason || '账户身份发生变化或存在冲突，本地记录未删除。');
       // X may briefly remove its profile controls while applying the native action.
       // Missing elements pause evidence; contradictory identities invalidate it.
       if (run.armed && trustedIntent(run)) {
@@ -244,7 +288,7 @@
         if (!active(run)) return;
         if (data.phase !== 'armed') return end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '检测未能开始，本地记录未删除。');
         const fresh = read(run);
-        if (fresh.conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+        if (fresh.conflict) return end(run, 'stopped', fresh.reason || '账户身份发生变化或存在冲突，本地记录未删除。');
         if (fresh.state !== 'following' || document.hidden || dialogs().length) {
           run.phase = 'watching'; run.reason = '关注状态在检测准备期间发生变化，正在重新核实当前状态…'; render(run); return;
         }
@@ -292,7 +336,7 @@
     document.addEventListener('click', run.onClick, true); document.addEventListener('visibilitychange', run.onVisibility); window.addEventListener('pagehide', run.onPageHide);
     // Mutation records may contain an entire React subtree. Re-read bounded header selectors only.
     run.observer = new MutationObserver(() => { void tick(run); });
-    run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'hidden', 'aria-hidden', 'disabled', 'aria-disabled', 'aria-busy']});
+    run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'hidden', 'aria-hidden', 'disabled', 'aria-disabled', 'aria-busy']});
     run.timer = setInterval(() => { void tick(run); }, 250);
     await tick(run); return snapshot(run);
   }
