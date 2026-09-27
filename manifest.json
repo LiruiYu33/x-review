@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "116",
   "name": "X Review",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "description": "Review followed X accounts locally, collect public post observations and open candidates for manual review.",
   "permissions": [
     "activeTab",
