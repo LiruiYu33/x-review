@@ -82,8 +82,8 @@
     "Existing records were not overwritten. This does not follow the account again on X."
   ],
   [
-    "设置天数阈值后，逐个复核候选。点击账户行的「取消关注」，按提示允许读取 X 页面，在新窗口使用 X 原生按钮自行取关。工具仅在核实同一账户由已关注变为未关注后移除本地记录，无需重新扫描名单。直接关闭窗口、取消操作或无法确认状态时会保留记录。「撤销本地移除」只恢复本地记录，不会重新关注。关注列表自动清理的结果及撤销仍在「同步记录」中查看。",
-    "Set a day threshold and review candidates individually. Select Unfollow in an account row, allow X page access when prompted, and use X’s native controls in the new window. The tool removes the local record only after verifying the same account changed from following to not following; no list rescan is needed. Closing the window, cancelling, or an uncertain result keeps the record. Undo local removal restores only the local record and does not follow the account again. Following-list cleanup results and undo remain in Synchronisation history."
+    "设置天数阈值后，逐个复核候选。点击账户行的「取消关注」，按提示允许读取 X 页面，等待检测就绪后在新窗口使用 X 原生按钮自行取关。确认完成后请保留窗口，等待本地记录移除。若之前已经取关但记录仍在，可重新打开该账户；核实当前未关注且记录属于当前登录账户后，会自动同步本地记录，无需重新关注或扫描名单。取消操作、状态不明确或同步前关闭窗口时会保留记录。「撤销本地移除」只恢复本地记录，不会重新关注。名单自动清理及撤销仍在「同步记录」中查看。",
+    "Set a day threshold and review candidates individually. Select Unfollow in an account row, allow X page access when prompted, and wait until monitoring is ready before using X’s native controls. Keep the window open after confirming until the local record is removed. If you previously unfollowed but the record remains, reopen that account: once its current non-following state and ownership by the signed-in account are verified, the local record is synchronised without following again or rescanning the list. Cancelling, an uncertain result or closing before synchronisation keeps the record. Undo local removal restores only local data and does not follow the account again. Following-list cleanup and undo remain in Synchronisation history."
   ],
   [
     "此版本免费，不读取 Cookie，也不会代你点击 X 的关注或取关按钮。关注名单收集和发帖时间检查是分别启动的两步。发帖检查须由你点击开始并授予可选的 x.com 网站访问权限；默认最多检查 5,000 个账户，每个账户间隔 3 秒，另需页面加载时间。检查失败、受保护或无法确定日期的账户仍需核实，不会因为没有读到帖子就被判为不活跃。名单收集的进度可在 X 页内查看，其标签页隐藏时会暂停；发帖检查的进度请在控制页查看。名单收集可在弹窗或页内面板停止；发帖检查可在控制页或弹窗停止，关闭或刷新控制页也会停止。清空本地名单会停止运行中的任务。X 限制非 API 自动化，自动滚动及页面分析不等于获得平台许可，也不能保证账号不受限制。",

@@ -135,7 +135,8 @@
       const initial = await get();
       if (!initial || initial.runId !== message.runId || sender.id !== chrome.runtime.id || sender.tab?.id !== initial.tabId || sender.frameId !== 0 || typeof sender.documentId !== 'string') throw Error('取关观察会话已失效。');
       if (!fresh(initial)) return publicRun(initial);
-      if (!['following', 'confirmed'].includes(message.phase) || !validIdentity(message)) throw Error('取关页面证据无效，本地记录已保留。');
+      if (!['following', 'confirmed', 'reconcile'].includes(message.phase) || !validIdentity(message)) throw Error('取关页面证据无效，本地记录已保留。');
+      if (message.phase === 'reconcile' && !['watching', 'armed'].includes(initial.phase)) throw Error('取关观察会话已失效。');
       const page = route(sender.url);
       if (!page?.handle || !sameHandle(page.handle, message.handle) || !matchesTarget(initial, message)) throw Error('主页身份与目标账户不一致，本地记录已保留。');
       if (!await permission()) throw Error('X 页面读取权限已撤销，本地记录已保留。');
@@ -148,6 +149,10 @@
         const proof = probe?.result;
         if (probe?.documentId !== sender.documentId || !proof || proof.runId !== initial.runId || proof.id !== message.id || !sameHandle(proof.handle, message.handle) || !sameHandle(proof.viewer, message.viewer) || proof.state !== (message.phase === 'following' ? 'following' : 'follow')) throw Error('无法再次确认取关页面状态，本地记录已保留。');
         if (message.phase === 'confirmed' && (proof.trustedAction !== true || !Number.isFinite(proof.stableFor) || proof.stableFor < 2000)) throw Error('尚未确认手动取关后的稳定状态，本地记录已保留。');
+        if (message.phase === 'reconcile' && (proof.observationKind !== 'already-not-following' || proof.trustedAction !== false || !Number.isFinite(proof.stableFor) || proof.stableFor < 2000)) throw Error('尚未确认当前未关注此账号的稳定状态，本地记录已保留。');
+        const latest = await get();
+        if (!latest || latest.runId !== initial.runId || !fresh(latest)) throw Error('取关观察会话已失效。');
+        if (!await permission()) throw Error('X 页面读取权限已撤销，本地记录已保留。');
       }
       await verifyCurrent();
       return enqueue(async () => {
@@ -159,10 +164,12 @@
         const bound = run.phase === 'armed';
         if (bound && (run.documentId !== sender.documentId || run.id !== message.id || !sameHandle(run.handle, message.handle) || !sameHandle(run.viewer, message.viewer))) throw Error('取关期间账号或页面身份已改变，本地记录已保留。');
         if (message.phase === 'confirmed' && !bound) throw Error('尚未记录到正在关注状态，本地记录已保留。');
+        if (message.phase === 'reconcile' && !['watching', 'armed'].includes(run.phase)) throw Error('取关观察会话已失效。');
         const data = await load(), record = data.records.find(record => record.key === run.key);
         const identity = {handle: message.handle, id: message.id, viewer: message.viewer};
         let retention = '';
         if (!record || fingerprint(record) !== run.fingerprint) retention = '本地记录已被修改或移除，未覆盖你的后续操作。';
+        else if (message.phase === 'reconcile' && !record.followingOwners?.length) retention = '这条记录没有关注名单归属，无法确认它属于当前登录账号，已保留本地记录。';
         else if ((record.followingOwners || []).some(owner => !sameHandle(owner, message.viewer))) retention = '这条记录属于其他或多个关注名单，已保留本地记录。';
         else if (data.records.some(other => other.key !== record.key && sameHandle(other.handle, message.handle) && other.id && other.id !== message.id)) retention = '本地存在同名但 ID 不同的账户，已保留记录供你核实。';
         if (retention) {
@@ -174,7 +181,12 @@
           await verifyCurrent();
           await chrome.storage.local.set({[KEY]: armed}); return publicRun(armed);
         }
-        const removed = {...outcome(run, 'removed', '已确认手动取关，并移除对应本地记录。无需重新扫描关注名单。'), ...identity};
+        // A current-state reconciliation is not evidence of a new manual action.
+        // Only records already associated with this viewer can use this path.
+        const reason = message.phase === 'reconcile'
+          ? '已确认当前未关注此账号，并同步移除过期的本地记录。无需重新扫描关注名单。'
+          : '已确认手动取关，并移除对应本地记录。无需重新扫描关注名单。';
+        const removed = {...outcome(run, 'removed', reason), ...identity};
         const changes = {[KEY]: removed, reviewData: {...data, records: data.records.filter(item => item.key !== run.key)},
           [UNDO]: {runId: run.runId, record, viewer: message.viewer, removedAt: now()}};
         const syncUndo = (await chrome.storage.local.get('followingSyncUndo')).followingSyncUndo;

@@ -24,11 +24,14 @@ function harness(overrides = {}) {
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../background.js'),'utf8'),context);
   const sender={id:'test',url:'chrome-extension://test/index.html',tab:{id:1}};
   const page={id:'test',tab:{id:11},frameId:0,documentId:'doc-1',url:'https://x.com/target'};
-  const send=(message,from=sender)=>new Promise(resolve=>events.message(message,from,resolve));
+  const send=(message,from=sender)=>new Promise(resolve=>{
+    if(events.message(message,from,resolve)===false)resolve({ok:false,error:'Message ignored'});
+  });
   const begin=async()=>{const result=await send({type:'UNFOLLOW_BEGIN',key:original.key});assert(result.ok,result.error);tab.status='complete';return result.data;};
   async function observe(phase,extra={},from=page){
     const identity={runId:stored.manualUnfollow.runId,handle:'target',id:original.id||'123',viewer:'owner',...extra};
-    proof={...identity,state:phase==='following'?'following':'follow',trustedAction:phase==='confirmed',stableFor:2500};
+    proof={...identity,state:phase==='following'?'following':'follow',trustedAction:phase==='confirmed',stableFor:2500,
+      ...(phase==='reconcile'?{observationKind:'already-not-following'}:{})};
     return send({type:'UNFOLLOW_OBSERVED',phase,...identity},from);
   }
   return {stored,writes,windows,tab,events,page,sender,original,send,begin,observe,
@@ -45,6 +48,88 @@ test('manual unfollow opens one native popup and only verified transition delete
 });
 test('already-follow state without a recorded following state cannot delete',async()=>{
   const h=harness();await h.begin();assert.equal((await h.observe('confirmed')).ok,false);assert(hasTarget(h));
+});
+test('a stable not-followed account reconciles an owner-bound stale record atomically',async()=>{
+  const h=harness({followingOwners:['owner','OWNER']});await h.begin();
+  const done=await h.observe('reconcile');assert.equal(done.data.phase,'removed');assert(!hasTarget(h));
+  assert.match(done.data.reason,/当前未关注/);assert.doesNotMatch(done.data.reason,/已确认手动取关/);
+  assert.equal(h.stored.reviewData.records.length,1);
+  const transaction=h.writes.find(write=>write.manualUnfollow?.phase==='removed');
+  assert(transaction.reviewData);assert.equal(transaction.manualUnfollowUndo.record.key,h.original.key);
+  assert.equal(h.windows.length,1);
+});
+test('reconciliation after a queued arm acknowledgement preserves the bound identity',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  assert.equal((await h.observe('reconcile')).data.phase,'removed');assert(!hasTarget(h));
+});
+test('reconciliation cannot remove records with missing, different or multiple owners',async()=>{
+  for(const owners of [[],['another'],['owner','another']]){
+    const h=harness({followingOwners:owners});await h.begin();
+    const done=await h.observe('reconcile');assert.equal(done.data.phase,'retained');assert(hasTarget(h));
+    assert.match(done.data.reason,owners.length?/其他或多个/:/没有关注名单归属/);
+    assert.equal(h.stored.manualUnfollowUndo,undefined);
+  }
+  const h=harness();await h.begin();
+  assert.equal((await h.observe('reconcile',{viewer:'another'})).data.phase,'retained');assert(hasTarget(h));
+});
+test('reconciliation requires the intended tab, main frame, profile URL and numeric identity',async()=>{
+  for(const sender of [{tab:{id:99}},{frameId:1},{url:'https://x.com/someone_else'},{id:'other-extension'}]){
+    const h=harness();await h.begin();
+    assert.equal((await h.observe('reconcile',{}, {...h.page,...sender})).ok,false);assert(hasTarget(h));
+  }
+  for(const identity of [{handle:'someone_else'},{id:'999'}]){
+    const h=harness({id:'123'});await h.begin();
+    assert.equal((await h.observe('reconcile',identity)).ok,false);assert(hasTarget(h));
+  }
+});
+test('armed reconciliation rejects conflicting document, viewer and target identities',async()=>{
+  for(const change of [{documentId:'doc-old'},{viewer:'another'},{id:'999'}]){
+    const h=harness();await h.begin();await h.observe('following');
+    const sender={...h.page,...(change.documentId?{documentId:change.documentId}:{})};
+    assert.equal((await h.observe('reconcile',change,sender)).ok,false);assert(hasTarget(h));
+  }
+});
+test('reconciliation rejects incomplete, unstable or falsely attributed page proofs',async()=>{
+  for(const bad of [
+    {observationKind:undefined},{observationKind:'manual-unfollow'},{trustedAction:true},{trustedAction:undefined},
+    {stableFor:1999},{stableFor:Infinity},{stableFor:NaN},{stableFor:'2500'},
+    {state:'following'},{viewer:'another'},{id:'999'},{runId:'old-session'},{handle:'someone_else'}
+  ]){
+    const h=harness();await h.begin();h.mutateProof(()=>Object.assign(h.proof(),bad));
+    assert.equal((await h.observe('reconcile')).ok,false,JSON.stringify(bad));assert(hasTarget(h));
+  }
+});
+test('reconciliation probes again immediately before removal and preserves a refollowed account',async()=>{
+  const h=harness();await h.begin();let reads=0;
+  h.mutateProof(()=>{if(++reads===2)Object.assign(h.proof(),{state:'following',stableFor:0});});
+  assert.equal((await h.observe('reconcile')).ok,false);assert.equal(reads,2);assert(hasTarget(h));
+});
+test('reconciliation keeps records when the run expires or access is revoked during a probe',async()=>{
+  for(const action of ['expire','revoke']){
+    const h=harness();await h.begin();let reads=0;
+    h.mutateProof(()=>{if(++reads===2){if(action==='expire')h.stored.manualUnfollow.expiresAt='2000-01-01T00:00:00Z';else h.permission(false);}});
+    assert.equal((await h.observe('reconcile')).ok,false);assert(hasTarget(h));
+  }
+});
+test('concurrent local edits are retained when current X state is reconciled',async()=>{
+  const h=harness();await h.begin();await h.send({type:'STATUS',key:h.original.key,status:'keep'});
+  const done=await h.observe('reconcile');assert.equal(done.data.phase,'retained');assert(hasTarget(h));
+  assert.equal(h.stored.reviewData.records.find(record=>record.key===h.original.key).status,'keep');
+  assert.equal(h.stored.manualUnfollowUndo,undefined);
+});
+test('reconciliation keeps conflicting local numeric identities',async()=>{
+  const h=harness();h.stored.reviewData.records.push(core.normaliseRecord({handle:'target',id:'999'}));await h.begin();
+  assert.equal((await h.observe('reconcile')).data.phase,'retained');assert(hasTarget(h));
+});
+test('undo restores reconciled local data without an X action and ignores duplicate completion',async()=>{
+  const h=harness();await h.begin();await h.observe('reconcile');
+  assert.equal((await h.send({type:'UNFOLLOW_STATUS'})).data.canUndo,true);
+  assert.equal((await h.send({type:'UNFOLLOW_UNDO'})).data.restored,1);assert(hasTarget(h));
+  await h.observe('reconcile');assert(hasTarget(h));assert.equal(h.windows.length,1);
+});
+test('failed reconciliation transactions retain the record and prior undo',async()=>{
+  const h=harness();h.stored.manualUnfollowUndo={runId:'older',record:core.normaliseRecord({handle:'prior'})};await h.begin();h.failRemoval();
+  assert.equal((await h.observe('reconcile')).data.phase,'failed');assert(hasTarget(h));assert.equal(h.stored.manualUnfollowUndo.runId,'older');
 });
 test('foreign tabs, iframes, stale documents and wrong profile identities cannot delete',async()=>{
   const h=harness({id:'123'});await h.begin();await h.observe('following');
