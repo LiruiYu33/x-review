@@ -161,15 +161,20 @@
   function render(run) {
     if (!run.panel) return;
     const {host, title, status, detail, close} = run.panel;
-    host.setAttribute('lang', globalThis.XReviewI18n?.getLanguage() || 'zh-CN');
-    host.setAttribute('aria-label', t('X Review 手动取消关注'));
-    title.textContent = t('X Review · 手动取消关注');
-    status.textContent = t(run.reason);
-    detail.textContent = t(['stopped', 'failed'].includes(run.phase)
+    const setAttribute = (node, name, value) => { if (node.getAttribute(name) !== value) node.setAttribute(name, value); };
+    const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+    // Same-value attribute writes still enqueue MutationObserver records. Keep
+    // repeated waiting-state renders inert while X is loading its profile.
+    setAttribute(host, 'lang', globalThis.XReviewI18n?.getLanguage() || 'zh-CN');
+    setAttribute(host, 'aria-label', t('X Review 手动取消关注'));
+    setText(title, t('X Review · 手动取消关注'));
+    setText(status, t(run.reason));
+    setText(detail, t(['stopped', 'failed'].includes(run.phase)
       ? '检测已结束，继续等待不会更新记录。请回到工作台重新打开此账户以核实当前状态；无需重新关注。'
-      : '等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。');
-    detail.hidden = ['removed', 'retained'].includes(run.phase) || run.reconcileSince > 0;
-    close.textContent = t(active(run) ? '停止检测' : '关闭提示');
+      : '等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。'));
+    const hideDetail = ['removed', 'retained'].includes(run.phase) || run.reconcileSince > 0;
+    if (detail.hidden !== hideDetail) detail.hidden = hideDetail;
+    setText(close, t(active(run) ? '停止检测' : '关闭提示'));
   }
   function createPanel(run) {
     document.getElementById(PANEL_ID)?.remove();
@@ -334,8 +339,12 @@
     run.onVisibility = () => { run.followSince = 0; resetReconciliation(run); };
     run.onPageHide = () => { if (active(run)) end(run, 'stopped', '页面已关闭或刷新，本地记录未删除。'); };
     document.addEventListener('click', run.onClick, true); document.addEventListener('visibilitychange', run.onVisibility); window.addEventListener('pagehide', run.onPageHide);
-    // Mutation records may contain an entire React subtree. Re-read bounded header selectors only.
-    run.observer = new MutationObserver(() => { void tick(run); });
+    // Ignore our own panel host as well as its descendants. Its accessible
+    // label lives outside the shadow root and must not retrigger page reads.
+    // Native page mutations still re-read only the bounded profile selectors.
+    run.observer = new MutationObserver(records => {
+      if (records.some(record => !run.panel?.host.contains(record.target))) void tick(run);
+    });
     run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'hidden', 'aria-hidden', 'disabled', 'aria-disabled', 'aria-busy']});
     run.timer = setInterval(() => { void tick(run); }, 250);
     await tick(run); return snapshot(run);

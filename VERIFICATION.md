@@ -1,12 +1,22 @@
 # Verification record
 
-Target version: 1.6.3. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.4. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.4 profile-loading feedback-loop fix
+
+Version 1.6.3 added native `aria-label` observation, but every waiting-state render also rewrote that attribute on the extension panel's light-DOM host. Browsers deliver attribute mutations even when the value is unchanged. The observer consequently reacted to its own panel, repeatedly rendered it and starved normal page tasks until the 25-second profile-recognition timeout. Read-only inspection of the reported window found the page eventually loaded with that timeout message. No native account action was performed.
+
+Rendering is now idempotent, and the observer excludes mutations targeting its own panel while retaining observation of native X controls. Profile identity checks, the startup deadline, stable-state requirements, background verification and manual-action requirements are unchanged.
+
+A real-browser comparison used the unchanged v1.6.3 watcher and the corrected watcher against the same fictional profile scheduled to appear after 500 ms. The baseline delayed insertion to 25,019 ms, delivered 551,517 observer callbacks and stopped; the corrected watcher allowed insertion at 516 ms, delivered one observer callback before the result snapshot and reached the armed state. These are measurements from one local fixture run, not live X network-performance guarantees. The fixture uses a scoped fictional X URL and mocked extension acknowledgements, so it does not validate the installed service worker end to end.
+
+All 148 included Node.js tests and root JavaScript syntax checks passed. The two new loading/panel regressions also failed against the unchanged v1.6.3 source at the bounded mutation-delivery limit, confirming that they detect the original defect. The DOM test harness now delivers filtered attribute mutations, including same-value writes, through a bounded queue. This covers delayed profile readiness, exclusion of panel-only mutations and prompt detection of native accessible-label changes. Earlier mock observers required explicit test notifications and missed this feedback loop.
 
 ## Version 1.6.3 subscription-enabled profile recognition
 
