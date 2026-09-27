@@ -33,6 +33,8 @@ Use the language selector in the popup, review workspace, or activity-check page
 
 Open your own Following page at `https://x.com/YOUR_HANDLE/following` and wait for the list to load. Open the extension, check the displayed owner, confirm that this is your own following list, and start automatic collection. X Review scrolls the page, saves the accounts it can read, and merges duplicates. Closing the popup does not stop collection. Hiding the X tab pauses it; returning to the tab resumes it. You can stop at any time and keep the records already saved.
 
+Account identity is checked using the row's avatar profile link and a matching displayed handle. Mentions of other accounts in a biography do not count as additional followed accounts or cause the primary account to be skipped.
+
 Each scroll waits approximately 2.5 seconds. Collection stops after approximately 20 seconds without new accounts at the bottom, or after 20 minutes, 500 scrolls, or 10,000 accounts. These limits do not prove that the list is complete. Failed loading, hidden entries, or changes to X's page can leave gaps. A completed collection can also remove old local records; read [Automatic local cleanup](#automatic-local-cleanup) before starting.
 
 You can instead import `data/following.js` from your [X account archive](https://help.x.com/en/managing-your-account/accessing-your-x-data), a JSON backup, a CSV file, or one handle or profile URL per line. Select only `following.js`, not the full archive ZIP. The file is parsed as data and is never executed. Manual page capture is also available: read the currently loaded list, review the preview, confirm ownership, and save it. Imports and manual captures merge records without triggering automatic cleanup.
@@ -102,7 +104,7 @@ The extension does not request `cookies`, `tabs`, or `webRequest` permissions. N
 
 X Review is independent of X and is not endorsed by X. Free software and manual unfollowing do not guarantee compliance with X's rules or protection from account restrictions. Review the [X automation rules](https://help.x.com/en/rules-and-policies/x-automation) before using page automation. Local archive import and manual observations remain available if you choose not to use the page-reading features.
 
-Automated validation uses isolated browser fixtures and sample data. Real, signed-in X pages and a physical Edge installation have not been validated. X can change its page structure, language, and loading behaviour; unreadable content means insufficient evidence, not inactivity. See [VERIFICATION.md](VERIFICATION.md) for the recorded validation scope.
+Automated validation uses isolated browser fixtures and sample data. A limited read-only check of a signed-in Following page helped diagnose account-row parsing; the complete updated extension workflow on signed-in X and a physical Edge installation have not been validated. X can change its page structure, language, and loading behaviour; unreadable content means insufficient evidence, not inactivity. See [VERIFICATION.md](VERIFICATION.md) for the recorded validation scope.
 
 ## Development and contribution
 

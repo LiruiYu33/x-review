@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.0. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.1. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
-The validation described below uses local sample data and isolated browser fixtures. It does not access a user's browser profile or actual following list. Real, signed-in X pages and a physical Edge installation have not been validated. Fixture success does not prove that current X markup, loading behaviour, or every page language is supported.
+The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.1 following-list identity fix
+
+The previous reader searched every profile link and handle in an entire account row. A biography mentioning another account therefore produced multiple identity candidates and caused the followed account to be skipped. Read-only inspection of a signed-in Following page confirmed this failure on 36 observed rows. The inspection identified 177 distinct displayed account identities while the profile counter showed 178; that remaining discrepancy was not resolved, so this is not evidence of a complete 178-account scan.
+
+The updated reader requires an unambiguous avatar identity, a matching avatar profile destination, and a separate exact displayed handle link. Biography mentions no longer disqualify an otherwise verified account. Conflicting identity evidence remains excluded. Older layouts without avatar metadata retain the conservative single-candidate rule. The collection timing and local-cleanup policy are unchanged.
+
+Thirteen new dependency-free Node.js tests run the actual reader in a VM with a small DOM fixture. They cover biography mentions, link order, a fictional mixed list, conflicting avatar identities and destinations, missing corroboration, case handling, legacy layouts, recommendation exclusion, hidden rows, owner exclusion and deduplication. Fixtures contain fictional accounts; no actual following list or biography is included in the repository.
 
 ## Existing regression coverage
 

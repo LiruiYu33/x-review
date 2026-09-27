@@ -77,6 +77,38 @@
     return (at >= 0 ? text.slice(0, at).trim() : text).slice(0, 160) || handle;
   }
 
+  function followingIdentity(cell, links, displayedHandles) {
+    const avatars = [...cell.querySelectorAll('[data-testid^="UserAvatar-Container-"]')];
+    if (avatars.length) {
+      // Biography mentions are valid profile links too. Establish the row's
+      // identity from its avatar, then corroborate it with a separate @handle
+      // link, instead of treating every mention as a second account identity.
+      const identities = [];
+      for (const avatar of avatars) {
+        const suffix = avatar.getAttribute('data-testid').slice('UserAvatar-Container-'.length);
+        const handle = normaliseHandle(suffix);
+        const keys = [...new Set(links.filter(link => avatar.contains(link.anchor))
+          .map(link => link.handle.toLowerCase()))];
+        if (!handle || keys.length !== 1 || keys[0] !== handle.toLowerCase()) return null;
+        identities.push(keys[0]);
+      }
+      const keys = [...new Set(identities)];
+      if (keys.length !== 1) return null;
+      const key = keys[0];
+      const confirmation = links.find(link => link.handle.toLowerCase() === key
+        && !avatars.some(avatar => avatar.contains(link.anchor))
+        && textOf(link.anchor).toLowerCase() === '@' + key);
+      return confirmation ? { key, handle: textOf(confirmation.anchor).slice(1) } : null;
+    }
+    // Older page layouts without avatar identity metadata retain the previous
+    // conservative rule; an ambiguous legacy row must still be skipped.
+    const candidates = [...new Set(links.filter(link => displayedHandles.some(handle =>
+      handle.toLowerCase() === link.handle.toLowerCase())).map(link => link.handle.toLowerCase()))];
+    if (candidates.length !== 1) return null;
+    const key = candidates[0];
+    return { key, handle: displayedHandles.find(handle => handle.toLowerCase() === key) };
+  }
+
   function readFollowing(root, owner, observedAt, doc, win) {
     const warnings = [];
     const possibleScopes = [...root.querySelectorAll('[aria-label], section[aria-labelledby], [role="region"]')]
@@ -123,14 +155,11 @@
           anchor, handle: handleFromProfileLink(anchor.getAttribute('href'), win.location.href)
         })).filter(link => link.handle);
         const displayedHandles = handlesInText(textOf(cell));
-        // Require both a displayed @handle and its matching profile link.
-        const candidates = [...new Set(links.filter(link => displayedHandles.some(handle =>
-          handle.toLowerCase() === link.handle.toLowerCase())).map(link => link.handle.toLowerCase()))];
-        if (candidates.length !== 1) { skipped++; continue; }
-        const key = candidates[0];
+        const identity = followingIdentity(cell, links, displayedHandles);
+        if (!identity) { skipped++; continue; }
+        const { key, handle } = identity;
         if (key === owner.toLowerCase()) continue;
         const matchingLinks = links.filter(link => link.handle.toLowerCase() === key);
-        const handle = displayedHandles.find(handle => handle.toLowerCase() === key) || matchingLinks[0].handle;
         const nameLink = matchingLinks.find(link => textOf(link.anchor) && !textOf(link.anchor).startsWith('@'));
         const name = nameLink ? textOf(nameLink.anchor).slice(0, 160) : handle;
         records.set(key, { handle, name, source: 'visible-following' });
