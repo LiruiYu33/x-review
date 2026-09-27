@@ -1,12 +1,22 @@
 # Verification record
 
-Target version: 1.6.6. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.7. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.7 faster post-date checks
+
+Profile checks remain serial in one X tab. A ready observation classified as recent under the selected inactivity threshold can complete after at least 2 seconds from navigation and 1 second of matching evidence. Old or insufficient evidence still requires at least 5 seconds; a ready timeline still needs 1.5 seconds of matching evidence on that path. Unavailable pages retain the 5-second minimum, and unresolved loading retains the 25-second deadline. The controller pauses for 1 second between accounts instead of 3 seconds.
+
+The service samples every 500 ms and installs the page reader once per visit, recovering if a reload removes it or script execution fails. Loading, missing probes and changes of document reset accumulated stability. Existing page readiness, account identity, permission, cancellation and login/rate-limit checks remain in place. Before saving a fast recent result, the service rechecks the current threshold; if it no longer establishes recent activity, it stops without changing that account's evidence or advancing the queue.
+
+All 216 included Node.js tests and root JavaScript syntax checks passed. The 37 new service and controller cases cover recent and conservative timing boundaries, changing timestamps, loading and document replacement, script recovery, threshold changes before saving, serial requests, cancellation, navigation and permission loss, completion and language switching. The control-page timing regressions fail against the unchanged 1.6.6 controller. Two focused service regressions also fail against the exact 1.6.6 source: recent evidence is not committed by 2 seconds, and an unchanged profile receives repeated script installations.
+
+The timing checks use a virtual clock and mocked Chrome APIs. They verify the production service and controller logic, not live X loading or total run duration. No real account actions were performed for this update.
 
 ## Version 1.6.6 faster manual-unfollow recognition
 

@@ -71,7 +71,7 @@ globalThis.XReviewI18n.register([
   ['重新检查全部待审账户', 'Recheck all accounts awaiting review'],
   ['本轮最多检查', 'Maximum accounts this run'],
   ['个账户', 'accounts'],
-  ['两种范围都跳过「保留」和「已处理」账户。默认最多 5,000 个，实际以可检查的账户数为准。每个账户读取后间隔 3 秒，再加上页面加载时间；大量账户可能需要较长时间，可改小数量或随时停止。', 'Both options skip accounts marked Keep or Reviewed. The default limit is 5,000, subject to the number of eligible accounts. Each account adds a three-second interval plus page loading time. Large lists can take a while; lower the limit or stop at any time.'],
+  ['两种范围都跳过「保留」和「已处理」账户。默认最多 5,000 个，实际以可检查的账户数为准。账户之间间隔 1 秒。已读到阈值内发帖的主页最早约 2 秒完成检查；旧帖子或证据不足仍至少观察 5 秒，页面加载最多等待 25 秒。大量账户可改小数量或随时停止。', 'Both options skip accounts marked Keep or Reviewed. The default limit is 5,000, subject to the number of eligible accounts. Checks pause for one second between accounts. Profiles with posts inside your threshold can finish after about two seconds; old or insufficient evidence retains at least five seconds of observation, with up to 25 seconds for loading. Lower the limit or stop at any time.'],
   ['开始时需要你的浏览器授权', 'Browser permission is required to start'],
   ['自动打开后续主页需要额外的 X 网站访问权限。首次开始时，浏览器会询问是否允许访问 x.com；拒绝授权不会启动检查。授权后仍须由你点击开始，不会在打开本页时自行运行。', 'Opening subsequent profiles requires additional access to X. On first use, your browser asks for access to x.com. Declining this permission prevents checks from starting. After granting permission, checks still start only when you select Start checking, never merely by opening this page.'],
   ['开始检查', 'Start checking'],
