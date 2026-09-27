@@ -143,7 +143,7 @@ async function handle(message) {
         return { ...record, updatedAt: importedAt };
       });
       data.records = core.mergeRecords(data.records, incoming);
-      if (Number.isInteger(message.thresholdDays) && message.thresholdDays >= 1 && message.thresholdDays <= 3650) data.thresholdDays = message.thresholdDays;
+      if (Number.isInteger(message.thresholdDays) && message.thresholdDays >= 0 && message.thresholdDays <= 3650) data.thresholdDays = message.thresholdDays;
       break;
     }
     case 'EVIDENCE': {
@@ -163,7 +163,7 @@ async function handle(message) {
       break;
     }
     case 'THRESHOLD':
-      if (!Number.isInteger(message.days) || message.days < 1 || message.days > 3650) throw Error('阈值须为 1–3650 天');
+      if (!Number.isInteger(message.days) || message.days < 0 || message.days > 3650) throw Error('阈值须为 0–3650 天');
       data.thresholdDays = message.days;
       break;
     case 'CLEAR': {

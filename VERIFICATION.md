@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.9. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.10. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.10 zero-day review filter
+
+The workspace accepts integer thresholds from 0 to 3,650 days. Applying zero opens an Outside Keep list view containing every record not marked Keep, including missing or expired observations and Reviewed records. Row evidence categories remain separate from this display rule; the filter does not establish inactivity or change stored evidence. Sidebar and overview counts, search and CSV export use the same list selection. Positive thresholds retain the evidence-based candidate filter. Zero survives ordinary storage and JSON backup restoration in both extension and standalone paths.
+
+All 256 included Node.js tests and root JavaScript syntax checks passed. Three new regressions verify zero-value persistence and retrieval, backup restoration, rejection of invalid thresholds without overwriting the saved value, and preservation of unknown, stale, Keep and Reviewed evidence categories. Read-only review checked that the workspace selection and counts share the same rule and that CSV uses the filtered rows.
+
+A local Chrome workspace check used the built-in fictional demo and a separate fictional JSON import. Zero showed seven of eight demo records, excluded the kept account and retained the unknown, stale and Reviewed rows with their own labels. Marking another record Keep immediately reduced the result to six; applying 180 restored the original three evidence-based candidates. Chinese and English labels, applying zero from All accounts, JSON restoration, reload persistence and rejection of a negative value were checked through the real workspace interface. No real X account or installed-extension record was changed; background persistence is covered by the mocked browser tests.
 
 ## Version 1.6.9 scrolling and same-window recovery
 

@@ -84,6 +84,58 @@ test('invalid and future dates stay unknown; manual dates obey freshness', () =>
   assert.equal(C.classify(record({ status: 'reviewed' }), 180, NOW).bucket, 'reviewed');
 });
 
+test('zero days leaves unknown evidence, expired observations and review labels intact', () => {
+  const cases = [
+    [record({ evidence: undefined }), 'unknown'],
+    [record({ evidence: evidence({ hasUncertainReposts: true }) }), 'unknown'],
+    [record({ evidence: evidence({ observedAt: '2026-09-01T00:00:00Z' }) }), 'stale'],
+    [record({ status: 'keep' }), 'keep'],
+    [record({ status: 'reviewed' }), 'reviewed']
+  ];
+  const before = JSON.stringify(cases);
+  for (const [value, expected] of cases) assert.equal(C.classify(value, 0, NOW).bucket, expected);
+  assert.equal(JSON.stringify(cases), before, 'A workspace filter must not rewrite account evidence or review labels');
+});
+
+test('zero threshold persists through GET and invalid updates cannot replace it', async () => {
+  const records = [record({ handle: 'Kept', status: 'keep' }), record({ handle: 'Unknown', evidence: undefined })];
+  const h = backgroundHarness(records);
+  const applied = await h.send({ type: 'THRESHOLD', days: 0 });
+  assert.equal(applied.ok, true);
+  assert.equal(applied.data.thresholdDays, 0);
+  assert.equal(h.stored.reviewData.thresholdDays, 0);
+  assert.equal((await h.send({ type: 'GET' })).data.thresholdDays, 0);
+  assert.deepEqual(h.stored.reviewData.records, records);
+  for (const days of [-1, 0.5, 3651, NaN, Infinity, '0']) {
+    const before = h.writes.length;
+    const rejected = await h.send({ type: 'THRESHOLD', days });
+    assert.equal(rejected.ok, false, 'Reject invalid threshold ' + String(days));
+    assert.equal(h.writes.length, before, 'Invalid input cannot write review data');
+    assert.equal((await h.send({ type: 'GET' })).data.thresholdDays, 0);
+    assert.deepEqual(h.stored.reviewData.records, records);
+  }
+});
+
+test('a JSON backup restores zero over the default threshold and invalid imported thresholds preserve it', async () => {
+  const h = backgroundHarness([record({ handle: 'Existing', status: 'keep' })]);
+  const backup = JSON.stringify({ schemaVersion: 1, thresholdDays: 0,
+    records: [record({ handle: 'Imported', status: 'reviewed', evidence: undefined })] });
+  const parsed = C.parseImport(backup, 'backup.json', NOW);
+  const restored = await h.send({ type: 'MERGE', records: parsed.records, thresholdDays: JSON.parse(backup).thresholdDays });
+  assert.equal(restored.ok, true);
+  const saved = (await h.send({ type: 'GET' })).data;
+  assert.equal(saved.thresholdDays, 0);
+  assert.equal(saved.records.find(value => value.handle === 'Existing').status, 'keep');
+  assert.equal(saved.records.find(value => value.handle === 'Imported').status, 'reviewed');
+  assert.equal(JSON.parse(JSON.stringify(saved)).thresholdDays, 0, 'A subsequent JSON export preserves zero');
+  for (const thresholdDays of [-1, 0.5, 3651, '0']) {
+    const result = await h.send({ type: 'MERGE', records: [], thresholdDays });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.thresholdDays, 0, 'Ignore an invalid backup threshold without resetting the saved filter');
+    assert.equal(h.stored.reviewData.records.length, 2);
+  }
+});
+
 test('merging keeps review decisions and the latest known post across pinned-post snapshots', () => {
   const first = record({ id: '123', status: 'keep', evidence: evidence({ observedAt: '2026-09-25', latestPostAt: '2026-09-24' }) });
   const later = record({ id: '123', handle: 'Renamed', evidence: evidence() });

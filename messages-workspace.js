@@ -1,6 +1,10 @@
 (function () {
   'use strict';
   globalThis.XReviewI18n.register([
+  ['未保留账户', 'Outside Keep list'],
+  ['当前没有未保留账户', 'No accounts outside your Keep list'],
+  ['0 天显示所有未保留账户；大于 0 天按发帖记录筛选，超过 7 天的观察需更新。', '0 days shows all accounts outside your Keep list. Higher thresholds use observed posts; observations older than 7 days need updating.'],
+  ['当前显示所有未加入保留名单的账户，包括待补充、观察过期和已处理的记录；这不是不活跃判定。', 'Showing every account outside your Keep list, including records needing evidence, expired observations and Reviewed accounts. This does not classify them as inactive.'],
   [
     "X 关注整理 · 本地工作台",
     "X Review · Local workspace"
@@ -434,8 +438,8 @@
     "Reviewed account"
   ],
   [
-    "请输入 1–3650 之间的整数天数",
-    "Enter a whole number of days between 1 and 3650"
+    "请输入 0–3650 之间的整数天数",
+    "Enter a whole number of days between 0 and 3650"
   ],
   [
     "筛选阈值已更新",
