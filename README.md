@@ -6,6 +6,12 @@ The interface supports English and Simplified Chinese, with a saved language pre
 
 ![X Review workspace in English, showing fictional demo accounts](preview.png)
 
+## Why the workflow is partly manual
+
+X Review deliberately trades some convenience for a free workflow. The [X API charges for access to data such as following lists and posts](https://docs.x.com/x-api/getting-started/pricing). X Review avoids that paid API dependency by working with imported files and information loaded in your browser, then storing and processing the results locally. You do not need API credits, a developer account, or a paid service to use the extension.
+
+That choice explains why you open your own Following page, start collection and profile checks, keep the relevant pages open while they load, and review the available evidence yourself. The extension assists with scrolling, sequential profile checks, filtering, and local record updates, but it cannot promise a complete, continuously updated view of every account. You confirm each unfollow using X's native controls, and the extension removes the local record automatically after verifying the change. Browser-based collection keeps the tool independent of paid API access, while manual unfollowing keeps each account change under your control.
+
 ## Install
 
 Use Chrome 116 or later, or an Edge release based on Chromium 116 or later. Installation is through the browser's unpacked-extension feature.
