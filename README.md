@@ -1,6 +1,6 @@
 # X Review
 
-X Review is a free, local browser extension for reviewing the accounts you follow on X. Collect a following list, record public post dates, and filter accounts that may warrant a closer look. Open each candidate on X to decide whether to unfollow it yourself. The extension never follows or unfollows accounts.
+X Review is a free, local browser extension for reviewing the accounts you follow on X. Collect a following list, record public post dates, and filter accounts that may warrant a closer look. Use the **Unfollow** button to open a separate X window, unfollow using X’s native controls yourself, and have the verified change remove the local record automatically. The extension never clicks follow or unfollow controls.
 
 The interface supports English and Simplified Chinese, with a saved language preference. There is no build step, server, subscription, API key, or external JavaScript dependency.
 
@@ -43,11 +43,21 @@ For a manual observation, open an account's profile from the workspace, select i
 
 The default threshold is 180 days. The comparison uses the interval between the observation date and the latest observed post, rather than allowing an old snapshot to become a candidate as time passes. Observations older than seven days require another check. Missing dates, protected profiles, unreadable pages, insufficient samples, and uncertain repost dates remain unknown rather than becoming inactivity candidates. A newer known pinned post can rule out a candidate; an old pinned post alone cannot establish inactivity.
 
-Review each candidate by opening its profile on X. If you decide to unfollow, use X's native controls yourself. Afterwards, mark the record as reviewed or add it to your keep list. These are local labels and do not verify or change the actual follow relationship. Public posting history cannot establish whether someone still logs in, reads posts, or uses X privately.
+Review each candidate on X before deciding. Public posting history cannot establish whether someone still logs in, reads posts, or uses X privately. **Keep** and **Reviewed** remain local labels; they do not verify or change the actual follow relationship.
+
+### 4. Unfollow manually and update the local list
+
+Select **Unfollow** in an account row. Allow optional `https://x.com/*` access if the browser asks. A separate X window opens the selected profile; wait for the extension to verify the account and following state, then use X’s own **Following → Unfollow** controls yourself. The extension observes the result but never clicks either control. Once it confirms a transition from following to not following for the same account, it removes that account’s unchanged local record and updates the workspace automatically. You do not need to rescan the following list or confirm a second local deletion.
+
+Only one manual unfollow window is monitored at a time. Use **Return to unfollow window** to focus it. Stop an active collection or activity check before starting this flow. Closing the X window, selecting **Stop monitoring**, cancelling X’s confirmation, or a page error leaves the local record intact. An account already shown as not followed on arrival is retained because no following-to-not-following transition was observed. The workspace reports whether the record was removed or retained.
+
+The observation must match the selected profile and the signed-in viewer. Numeric-ID records require matching visible identity evidence. Records associated with another viewer or multiple following-list owners, or changed locally during monitoring, are retained rather than removed using uncertain evidence. If X changes its markup or cannot expose an unambiguous state, the record remains available for review.
+
+After a successful removal, **Undo local removal** restores the last removed local record if that identity is still missing. It does not follow the account again on X or replace a newer record. This undo is separate from the following-list cleanup undo. Clearing the local list clears both undo copies. The normal **Open X profile** link remains available, but a profile opened through that link is not monitored for local removal.
 
 ## Automatic local cleanup
 
-After manually unfollowing accounts on X, run a new collection of your own Following page. When a non-empty collection starts at the top and naturally reaches a stable bottom, X Review automatically removes eligible old local records that were absent from that run. There is no second selection or deletion-confirmation step. This changes the local review list only.
+For unfollows performed outside the monitored **Unfollow** window, run a new collection of your own Following page when you want to reconcile the list. When a non-empty collection starts at the top and naturally reaches a stable bottom, X Review automatically removes eligible old local records that were absent from that run. There is no second selection or deletion-confirmation step. This changes the local review list only.
 
 Manual stops, failed loads, navigation changes, empty collections, and collection limits do not trigger cleanup. Numeric-ID records, kept accounts, accounts known to belong to another owner's list, and records added or changed during the run are retained. Older imported records with no owner information are treated as belonging to the own-list collection you confirmed. Existing scans from version 1.3 or earlier do not trigger retrospective cleanup.
 
@@ -65,9 +75,9 @@ another_user,Not yet checked,,
 
 Use ISO 8601 dates with `Z` or an explicit time-zone offset. Leave both dates empty when the account has not been checked. An X following archive generally supplies identities and links, not post-date evidence; imported accounts may therefore need observations before they can be classified.
 
-Export a JSON backup before updating, uninstalling, clearing browser data, or changing browsers. It contains account records, observations, review labels, and the filtering threshold. Importing it merges accounts with the destination list and restores a valid saved threshold. The backup does not include your language preference, active tasks, synchronisation history, or the cleanup undo copy. CSV export contains only the currently filtered and searched results; use JSON for a complete review-data backup.
+Export a JSON backup before updating, uninstalling, clearing browser data, or changing browsers. It contains account records, observations, review labels, and the filtering threshold. Importing it merges accounts with the destination list and restores a valid saved threshold. The backup does not include your language preference, active tasks, synchronisation history, or either local-removal undo copy. CSV export contains only the currently filtered and searched results; use JSON for a complete review-data backup.
 
-You can open `index.html` directly without installing the extension. This supports imports, filtering, manual date entry, and profile links, but cannot read X pages, collect lists, run profile checks, or perform automatic synchronisation. Standalone mode uses the browser's local storage when available. Extension data, standalone data, different browsers, and different browser profiles are separate; transfer review data explicitly with JSON backups.
+You can open `index.html` directly without installing the extension. This supports imports, filtering, manual date entry, and profile links, but cannot read X pages, collect lists, run profile checks, monitor manual unfollows, or perform automatic synchronisation. Standalone mode uses the browser's local storage when available. Extension data, standalone data, different browsers, and different browser profiles are separate; transfer review data explicitly with JSON backups.
 
 ## Privacy and permissions
 
@@ -76,9 +86,9 @@ Records and language preferences stay in local browser storage. X Review has no 
 | Permission | Purpose |
 | --- | --- |
 | `activeTab` | Temporary access to the current X tab when you invoke the extension for manual reading or list collection. |
-| `scripting` | Run the bundled page readers and collector in authorised tabs. |
-| `storage` | Save review records, preferences, task state, and the cleanup undo copy locally. |
-| Optional `https://x.com/*` access | Open and read successive profiles during a user-started activity check. You can revoke it in the browser's extension settings. |
+| `scripting` | Run the bundled page readers, collector, and manual-unfollow observer in authorised tabs. |
+| `storage` | Save review records, preferences, task state, and both local-removal undo copies locally. |
+| Optional `https://x.com/*` access | Read successive profiles during a user-started activity check and observe the selected profile in a user-opened unfollow window. You can revoke it in the browser's extension settings. |
 
 The extension does not request `cookies`, `tabs`, or `webRequest` permissions. No credentials or API keys are required by X Review. See the [Chrome activeTab documentation](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab) for the temporary-access model.
 
