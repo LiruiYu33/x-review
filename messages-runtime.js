@@ -101,7 +101,7 @@
     ['账户记录不存在', 'The account record does not exist.'],
     ['观察日期无效，请重新填写', 'The observation dates are invalid. Please enter them again.'],
     ['无效的记录状态', 'Invalid record status.'],
-    ['阈值须为 1–3650 天', 'The threshold must be 1–3650 days.'],
+    ['阈值须为 0–3650 天', 'The threshold must be 0–3650 days.'],
     ['本地名单已清空，自动采集同时停止。', 'The local list was cleared and collection stopped.'],
     ['找不到这条记录', 'This record could not be found.'],
     ['无效的 X 主页地址', 'Invalid X profile URL.'],

@@ -30,7 +30,7 @@ function localCommand(message, persist) {
   }
   if (message.type === 'MERGE') {
     data.records = core.mergeRecords(data.records, message.records);
-    if(Number.isInteger(message.thresholdDays)&&message.thresholdDays>=1&&message.thresholdDays<=3650)data.thresholdDays=message.thresholdDays;
+    if(Number.isInteger(message.thresholdDays)&&message.thresholdDays>=0&&message.thresholdDays<=3650)data.thresholdDays=message.thresholdDays;
   }
   if (message.type === 'EVIDENCE') {
     const index=data.records.findIndex(r=>r.key===message.key);
@@ -50,29 +50,38 @@ function fmt(date, withTime = false) {
   return new Intl.DateTimeFormat(i18n.getLocale(), opts).format(new Date(date));
 }
 function classified() { return data.records.map(record => ({record, result: core.classify(record, data.thresholdDays)})); }
+function inReviewList({record, result}) {
+  // Zero is a review-list shortcut, not evidence that an account is inactive.
+  return data.thresholdDays === 0 ? record.status !== 'keep' : result.bucket === 'candidate';
+}
 function visibleRows() {
-  return classified().filter(({record, result}) => (view === 'all' || (view === 'unknown' ? ['unknown','stale'].includes(result.bucket) : result.bucket === view)) && `${record.handle || ''} ${record.name || ''} ${record.id || ''}`.toLowerCase().includes(query.toLowerCase())).sort((a,b) => (b.result.days || -1) - (a.result.days || -1) || (a.record.handle || a.record.id || '').localeCompare(b.record.handle || b.record.id || ''));
+  return classified().filter(({record, result}) => (view === 'all' || (view === 'candidate' ? inReviewList({record, result}) : view === 'unknown' ? ['unknown','stale'].includes(result.bucket) : result.bucket === view)) && `${record.handle || ''} ${record.name || ''} ${record.id || ''}`.toLowerCase().includes(query.toLowerCase())).sort((a,b) => (b.result.days ?? -1) - (a.result.days ?? -1) || (a.record.handle || a.record.id || '').localeCompare(b.record.handle || b.record.id || ''));
 }
 function render() {
   const all = classified(), counts = {};
   all.forEach(({result}) => counts[result.bucket] = (counts[result.bucket] || 0) + 1);
   const unknown = (counts.unknown || 0) + (counts.stale || 0);
   text('stat-total', data.records.length);
-  text('stat-candidate', counts.candidate || 0);
+  const zeroThreshold = data.thresholdDays === 0, reviewCount = all.filter(inReviewList).length;
+  const reviewLabel = zeroThreshold ? '未保留账户' : labels.candidate;
+  text('stat-candidate-label', reviewLabel); text('nav-candidate-label', reviewLabel);
+  text('stat-candidate', reviewCount);
   text('stat-unknown', unknown);
   text('stat-keep', counts.keep || 0);
-  ['candidate','keep','reviewed'].forEach(key => $('nav-' + key).textContent = counts[key] || 0);
+  text('nav-candidate', reviewCount);
+  ['keep','reviewed'].forEach(key => $('nav-' + key).textContent = counts[key] || 0);
   text('nav-all', data.records.length); text('nav-unknown', unknown);
   $('threshold').value = data.thresholdDays;
   document.querySelectorAll('[data-view]').forEach(b => { b.classList.toggle('selected', b.dataset.view === view); if (b.dataset.view === view) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current'); });
-  text('list-title', labels[view]); text('list-description', descriptions[view]);
+  text('list-title', view === 'candidate' ? reviewLabel : labels[view]);
+  text('list-description', view === 'candidate' && zeroThreshold ? '当前显示所有未加入保留名单的账户，包括待补充、观察过期和已处理的记录；这不是不活跃判定。' : descriptions[view]);
   const rows = visibleRows(); text('result-count', `${rows.length} 个账户`);
   $('rows').replaceChildren(...rows.slice(0,500).map(renderRow));
   if (rows.length > 500) text('result-count', `${rows.length} 个账户 · 显示前 500 个，请搜索缩小范围`);
   $('account-table').hidden = rows.length === 0; $('empty-state').hidden = rows.length !== 0;
   const noData = data.records.length === 0;
-  text('empty-title', noData ? '先建立你的关注名单' : query ? '没有匹配的账户' : view === 'candidate' ? '当前没有待复核候选' : '这个名单暂时为空');
-  text('empty-text', noData ? '导入 X 档案中的 following.js、CSV，或粘贴用户名。没有发帖记录的账户会保留在「待补充数据」。' : view === 'candidate' && unknown ? `有 ${unknown} 个账户还需要补充或更新观察。未知状态不会自动成为候选。` : '试试其他视图、修改筛选阈值，或导入更多记录。');
+  text('empty-title', noData ? '先建立你的关注名单' : query ? '没有匹配的账户' : view === 'candidate' ? (zeroThreshold ? '当前没有未保留账户' : '当前没有待复核候选') : '这个名单暂时为空');
+  text('empty-text', noData ? '导入 X 档案中的 following.js、CSV，或粘贴用户名。没有发帖记录的账户会保留在「待补充数据」。' : view === 'candidate' && !zeroThreshold && unknown ? `有 ${unknown} 个账户还需要补充或更新观察。未知状态不会自动成为候选。` : '试试其他视图、修改筛选阈值，或导入更多记录。');
   $('empty-import').hidden = !noData;
   $('export-csv').disabled = rows.length === 0;
   $('mode-banner').hidden = isExtension && !demo;
@@ -205,7 +214,7 @@ function demoData() {
 }
 $('views').addEventListener('click', e => { const b=e.target.closest('[data-view]'); if(b){view=b.dataset.view;render();} });
 $('search').addEventListener('input', e => {query=e.target.value;render();});
-$('threshold-apply').addEventListener('click', async () => {const days=Number($('threshold').value); if(!Number.isInteger(days)||days<1||days>3650){notify('请输入 1–3650 之间的整数天数');return;} try{await command({type:'THRESHOLD',days});render();notify('筛选阈值已更新');}catch(e){notify(e.message);}});
+$('threshold-apply').addEventListener('click', async () => {const raw=$('threshold').value, days=Number(raw); if(!raw.trim()||!Number.isInteger(days)||days<0||days>3650){notify('请输入 0–3650 之间的整数天数');return;} try{await command({type:'THRESHOLD',days});if(days===0)view='candidate';render();notify('筛选阈值已更新');}catch(e){notify(e.message);}});
 ['import-open','empty-import'].forEach(id => $(id).addEventListener('click',showImport));
 $('import-submit').addEventListener('click', async () => {
   const submit=$('import-submit'); submit.disabled=true;
