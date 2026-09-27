@@ -1,12 +1,24 @@
 # Verification record
 
-Target version: 1.6.8. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.9. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.9 scrolling and same-window recovery
+
+A read-only inspection of two signed-in X profiles confirmed that scrolling leaves the main profile name and controls rendered offscreen. One profile gained a second native Follow button in the sticky header, with the same account label and numeric ID as its offscreen main button. A subscription-enabled profile instead gained only a paid Subscribe button; its actual relationship control remained in the main header. No real follow, unfollow or subscription action was performed.
+
+The watcher now separates fresh rendered identity evidence from the relationship controls currently in view. Matching main and sticky controls can coexist; visible relationship controls take priority over offscreen copies. If the sticky header has only a paid Subscribe button, the rendered main relationship remains usable. Profile-header boundaries, recommendation exclusions, a fresh numeric ID and the signed-in viewer are still required. Conflicting handles or IDs remain terminal, including conflicts on offscreen pending controls. Temporary disagreements between relationship states, labels or test IDs pause observation and reset stability instead of permanently stopping it.
+
+If a bound window shows Follow without a captured trusted action, it now performs the existing owner-bound two-second reconciliation in that same window. A missing-control gap of five seconds expires the click evidence but leaves the bound session watching within the existing ten-minute limit. Recognised manual actions retain their 500 ms stable-state path. Current-state recovery is explicitly reported as untrusted action evidence, and the background still requires matching stored ownership, unchanged local data, the original document and two fresh probes. Removal and undo are saved atomically before the original monitored tab is closed.
+
+All 253 included Node.js tests and root JavaScript syntax checks passed. New or strengthened cases cover scrolling, duplicate controls, both clickable header copies, offscreen identity conflicts, subscription-only sticky headers, state disagreement and recovery, missed clicks, cancellation and synthetic-event attribution, exact timing boundaries, ownerless records, changed viewers and final-probe failures. Five focused regressions fail against the unchanged 1.6.8 watcher: offscreen Following and Follow evidence, either clickable duplicate header, and same-window recovery after a missed click. These counterexamples use fictional accounts and a virtual clock.
+
+Three real Chrome fixture scenarios passed using the production watcher and fictional accounts: a sticky-header manual action while the offscreen copy remained Following, an uncaptured click followed by same-window reconciliation, and disagreement between two visible controls followed by recovery. The first reported manual confirmation about 700 ms after Follow appeared; the other two reported reconciliation after about 2.1 seconds. These fixtures mock background acknowledgements and do not exercise installed-extension storage or automatic window closure. The Node service tests separately check atomic save-before-close and local undo. The full updated extension has not been exercised by unfollowing a real signed-in account.
 
 ## Version 1.6.8 profile-check startup
 

@@ -283,30 +283,45 @@ test('a completed unfollow during the arming handshake is reconciled instead of 
   assert.equal(h.observations().at(-1).proof.trustedAction, false);
 });
 
-test('cancelling the native dialog cannot authorise a later unrelated Follow state', async () => {
+test('cancelling the native dialog cannot count as a trusted action; a later stable Follow state reconciles', async () => {
   const h = harness(); await h.start(); await h.click(h.button);
   const modal = await h.dialog(); await h.click(modal.cancel);
-  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(5000);
+  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(1999);
   assert.equal(h.observations().length, 1);
   assert.notEqual(h.state().phase, 'removed');
+  await h.advance(1);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction, false);
+  assert.equal(h.observations().at(-1).proof.observationKind, 'already-not-following');
+  assert.equal(h.observations().at(-1).proof.stableFor, 2000);
   assert.equal(h.proof().trustedAction, false);
 });
 
-test('synthetic clicks after arming cannot authorise local removal', async () => {
+test('synthetic clicks cannot count as a trusted action; a later stable Follow state reconciles', async () => {
   const h = harness(); await h.start(); await h.click(h.button, false);
   const modal = await h.dialog(); await h.click(modal.confirm, false);
-  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(5000);
+  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(1999);
   assert.equal(h.observations().length, 1);
   assert.notEqual(h.state().phase, 'removed');
+  await h.advance(1);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction, false);
+  assert.equal(h.observations().at(-1).proof.observationKind, 'already-not-following');
+  assert.equal(h.observations().at(-1).proof.stableFor, 2000);
   assert.equal(h.proof().trustedAction, false);
 });
 
-test('an unrelated confirmation dialog after arming cannot authorise local removal', async () => {
+test('an unrelated confirmation cannot count as a trusted action; a later stable Follow state reconciles', async () => {
   const h = harness(); await h.start(); await h.click(h.button);
   const modal = await h.dialog('TidalFox'); await h.click(modal.confirm);
-  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(5000);
+  modal.dialog.remove(); await h.change(); await h.setFollowing(false); await h.advance(1999);
   assert.equal(h.observations().length, 1);
   assert.notEqual(h.state().phase, 'removed');
+  await h.advance(1);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction, false);
+  assert.equal(h.observations().at(-1).proof.observationKind, 'already-not-following');
+  assert.equal(h.observations().at(-1).proof.stableFor, 2000);
 });
 
 for (const [label, change] of [
@@ -323,22 +338,30 @@ for (const [label, change] of [
   });
 }
 
-test('a persistently unreadable armed page ends with a visible reason rather than waiting indefinitely', async () => {
+test('an unreadable armed page remains recoverable before the existing ten-minute session deadline', async () => {
   const h = harness(); await h.start(); await h.confirm(); h.button.remove(); await h.change();
   await h.advance(31000);
+  assert.notEqual(h.state().phase, 'stopped');
+  assert.equal(h.proof().trustedAction, false);
+  await h.advance(570000);
   assert.equal(h.state().phase, 'stopped');
   assert.ok(h.state().reason);
   assert.equal(h.observations().length, 1);
   assert.ok(h.messages.some(message => message.type === 'UNFOLLOW_WATCH_STOPPED'));
 });
 
-test('five full seconds without a profile button invalidate the trusted action even if it later returns', async () => {
+test('five full seconds without a profile button expire the trusted action but later Follow can reconcile', async () => {
   const h = harness(); await h.start(); await h.confirm(); h.button.remove(); await h.change();
   await h.advance(5000);
-  assert.equal(h.state().phase, 'stopped');
+  assert.notEqual(h.state().phase, 'stopped');
+  assert.equal(h.proof().trustedAction, false);
   h.main.children.unshift(h.button); h.button.parentElement = h.main;
-  await h.setFollowing(false); await h.advance(2500);
+  await h.setFollowing(false); await h.advance(1999);
   assert.equal(h.observations().length, 1);
+  await h.advance(1);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction, false);
+  assert.equal(h.observations().at(-1).proof.stableFor, 2000);
 });
 
 test('a brief unknown state resets the complete 500-millisecond evidence window', async () => {
@@ -488,16 +511,20 @@ for (const locale of Object.keys(relationshipLabels)) {
     assert.equal(h.observations()[0].proof.id, '123');
   });
 
-  test(locale + ': clicking Subscribe cannot authorise a native relationship change', async () => {
+  test(locale + ': clicking Subscribe cannot create trusted intent; independent Follow evidence requires reconciliation', async () => {
     const h = harness(); const layout = subscriptionLayout(h, { locale });
     await h.start(); await h.click(layout.subscription);
     // Even an otherwise matching confirmation cannot create intent unless the
     // preceding trusted click came from the real relationship control.
     const modal = await h.dialog(); await h.click(modal.confirm);
-    modal.dialog.remove(); await h.change(); await layout.setFollowing(false); await h.advance(5000);
+    modal.dialog.remove(); await h.change(); await layout.setFollowing(false); await h.advance(1999);
     assert.deepEqual(h.observations().map(message => message.phase), ['following']);
     assert.notEqual(h.state().phase, 'removed');
     assert.equal(h.proof().trustedAction, false);
+    await h.advance(1);
+    assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+    assert.equal(h.observations().at(-1).proof.trustedAction, false);
+    assert.equal(h.observations().at(-1).proof.stableFor, 2000);
   });
 }
 
@@ -547,9 +574,7 @@ test('conflicting numeric IDs on two bound subscriptions cannot identify an icon
 });
 
 for (const [description, change] of [
-  ['a mismatched handle', button => button.setAttribute('aria-label', 'Unfollow @TidalFox')],
-  ['opposed visible and accessible labels', button => button.textContent = 'Follow'],
-  ['an opposed numeric relation suffix', button => button.setAttribute('data-testid', '123-follow')]
+  ['a mismatched handle', button => button.setAttribute('aria-label', 'Unfollow @TidalFox')]
 ]) {
   test('a native relationship control with ' + description + ' fails closed despite a valid subscription ID', async () => {
     const h = harness(); subscriptionLayout(h); change(h.button);
@@ -611,14 +636,17 @@ for (const [attribute, value] of [['disabled', ''], ['aria-disabled', 'true'], [
   });
 }
 
-test('cancelling an icon-only native unfollow retains the record with an adjacent subscription', async () => {
+test('cancelling an icon-only native unfollow permits only later independent two-second reconciliation', async () => {
   const h = harness(); const layout = subscriptionLayout(h);
   await h.start(); await h.click(h.button);
   const modal = await h.dialog(); await h.click(modal.cancel);
-  modal.dialog.remove(); await h.change(); await layout.setFollowing(false); await h.advance(5000);
+  modal.dialog.remove(); await h.change(); await layout.setFollowing(false); await h.advance(1999);
   assert.deepEqual(h.observations().map(message => message.phase), ['following']);
   assert.notEqual(h.state().phase, 'removed');
   assert.equal(h.proof().trustedAction, false);
+  await h.advance(1);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following', 'reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction, false);
 });
 
 for (const outcome of ['stopped', 'failed']) {
@@ -722,3 +750,179 @@ for (const placement of ['timeline tweet', 'recommended user cell', 'navigation'
     assert.equal(h.observations().at(-1).proof.id, '123');
   });
 }
+
+
+const offscreen = element => { element.rect = {...element.rect,top:-1500,bottom:-1470}; };
+function stickyHeader(h,{state='following',id='123',handle='FableBirch',withName=true}={}){
+  const header=node('div');
+  const name=node('div',{'data-testid':'UserName'},'Fictional account @'+handle);
+  const button=node('button',{'data-testid':id+'-'+(state==='following'?'unfollow':'follow'),'aria-label':(state==='following'?'Unfollow':'Follow')+' @'+handle},state==='following'?'Following':'Follow');
+  if(withName)header.append(name);
+  header.append(button);h.main.append(header,h.boundary);
+  return {header,name,button,async setFollowing(following){
+    button.setAttribute('data-testid',id+'-'+(following?'unfollow':'follow'));
+    button.setAttribute('aria-label',(following?'Unfollow':'Follow')+' @'+handle);
+    button.textContent=following?'Following':'Follow';await h.change();
+  }};
+}
+async function confirmFrom(h,button){
+  await h.click(button);const modal=await h.dialog();await h.click(modal.confirm);
+  modal.dialog.remove();await h.change();
+}
+
+for(const initial of ['following','follow']){
+  test('rendered offscreen profile identity and '+initial+' control remain readable after scrolling',async()=>{
+    const h=harness({initial});offscreen(h.name);offscreen(h.button);await h.start();
+    if(initial==='following'){
+      assert.equal(h.state().phase,'armed');
+      // Scrolling after the manual click must not make the bound profile vanish.
+      h.button.rect={...h.button.rect,top:80,bottom:110};await h.confirm();offscreen(h.button);
+      await h.setFollowing(false);await h.advance(500);
+      assert.equal(h.observations().at(-1).phase,'confirmed');
+    }else{
+      await h.advance(1999);assert.equal(h.observations().length,0);
+      await h.advance(1);assert.equal(h.observations().length,1);assert.equal(h.observations().at(-1).phase,'reconcile');
+    }
+    assert.equal(h.state().phase,'removed');
+  });
+}
+
+for(const clicked of ['main','sticky']){
+  test('same-target duplicate headers and controls accept a trusted click on the '+clicked+' control',async()=>{
+    const h=harness();const sticky=stickyHeader(h);await h.start();
+    assert.equal(h.state().phase,'armed');assert.equal(h.proof().id,'123');
+    await confirmFrom(h,clicked==='main'?h.button:sticky.button);
+    await h.setFollowing(false);await sticky.setFollowing(false);await h.advance(499);
+    assert.deepEqual(h.observations().map(message=>message.phase),['following']);
+    await h.advance(1);assert.equal(h.state().phase,'removed');
+    assert.equal(h.observations().at(-1).phase,'confirmed');
+    assert.equal(h.observations().at(-1).proof.trustedAction,true);
+  });
+}
+
+test('a visible sticky Follow state wins over the old offscreen Following control',async()=>{
+  const h=harness();offscreen(h.name);offscreen(h.button);const sticky=stickyHeader(h);await h.start();
+  assert.equal(h.state().phase,'armed');await confirmFrom(h,sticky.button);
+  await sticky.setFollowing(false);await h.advance(500);
+  assert.equal(h.button.textContent,'Following');
+  assert.equal(h.state().phase,'removed');assert.equal(h.observations().at(-1).phase,'confirmed');
+  assert.equal(h.observations().at(-1).proof.state,'follow');
+});
+
+test('contradictory visible relationship states pause evidence and recover without ending the session',async()=>{
+  const h=harness();const sticky=stickyHeader(h);await h.start();await h.confirm();
+  await h.setFollowing(false);await h.advance(2500);
+  assert.equal(h.proof().state,'unknown');assert.notEqual(h.state().phase,'stopped');
+  assert.deepEqual(h.observations().map(message=>message.phase),['following']);
+  await sticky.setFollowing(false);await h.advance(499);
+  assert.equal(h.observations().length,1);await h.advance(1);
+  assert.equal(h.state().phase,'removed');assert.equal(h.observations().at(-1).phase,'confirmed');
+});
+
+for(const [label,change] of [
+  ['opposed visible and accessible labels',button=>{button.textContent='Follow';}],
+  ['opposed numeric relationship suffix',button=>{button.setAttribute('data-testid','123-follow');}]
+]){
+  test('one control with '+label+' pauses until consistent state can be read',async()=>{
+    const h=harness();const layout=subscriptionLayout(h);change(h.button);
+    await h.start();await h.advance(2500);
+    assert.equal(h.proof().state,'unknown');assert.notEqual(h.state().phase,'stopped');
+    assert.equal(h.observations().length,0);
+    await layout.setFollowing(false);await h.advance(1999);assert.equal(h.observations().length,0);
+    await h.advance(1);assert.equal(h.state().phase,'removed');
+    assert.equal(h.observations()[0].phase,'reconcile');assert.equal(h.observations()[0].proof.trustedAction,false);
+  });
+}
+
+test('a previously bound numeric ID cannot replace missing current page ID evidence',async()=>{
+  const h=harness();await h.start();await h.confirm();
+  h.button.removeAttribute('data-testid');h.button.setAttribute('aria-label','Follow @FableBirch');h.button.textContent='Follow';
+  await h.change();await h.advance(3000);
+  assert.equal(h.proof().state,'unknown');assert.equal(h.proof().id,'');assert.equal(h.observations().length,1);
+  h.button.setAttribute('data-testid','123-follow');await h.change();await h.advance(500);
+  assert.equal(h.state().phase,'removed');assert.equal(h.observations().at(-1).proof.id,'123');
+});
+
+for(const [label,options] of [['another numeric ID',{id:'456'}],['another handle',{handle:'TidalFox'}]]){
+  test('a duplicate header carrying '+label+' is a fatal identity conflict even when offscreen',async()=>{
+    const h=harness();const sticky=stickyHeader(h,options);offscreen(sticky.name);offscreen(sticky.button);
+    await h.start();await h.advance(2500);
+    assert.equal(h.state().phase,'stopped');assert.equal(h.observations().length,0);
+  });
+}
+
+test('a visible subscription-only sticky header cannot invent a follow relationship',async()=>{
+  const h=harness();const layout=subscriptionLayout(h);offscreen(h.name);h.button.remove();
+  await h.start();await h.click(layout.subscription);await h.advance(26000);
+  assert.equal(h.observations().length,0);assert.equal(h.proof().state,'unknown');
+  assert.notEqual(h.state().phase,'removed');
+});
+
+test('an armed missed click uses two-second reconciliation without reopening the window',async()=>{
+  const h=harness();await h.start();await h.setFollowing(false);await h.advance(1999);
+  assert.deepEqual(h.observations().map(message=>message.phase),['following']);
+  assert.equal(h.proof().trustedAction,false);await h.advance(1);
+  assert.equal(h.state().phase,'removed');
+  const observed=h.observations().at(-1);
+  assert.equal(observed.phase,'reconcile');assert.equal(observed.proof.observationKind,'already-not-following');
+  assert.equal(observed.proof.trustedAction,false);assert.equal(observed.proof.stableFor,2000);
+});
+
+test('the armed missed-click fallback retains ownerless data when the service rejects reconciliation',async()=>{
+  const h=harness({reply:message=>({ok:true,data:{...message,phase:message.phase==='following'?'armed':'retained',reason:'Local ownership is unknown; record retained.'}})});
+  await h.start();await h.setFollowing(false);await h.advance(2000);
+  assert.equal(h.state().phase,'retained');assert.deepEqual(h.observations().map(message=>message.phase),['following','reconcile']);
+  assert.equal(h.observations().at(-1).proof.trustedAction,false);
+});
+
+test('cancelled or synthetic interactions alone never remove a record that still shows Following',async()=>{
+  for(const action of ['cancel','synthetic','subscription']){
+    const h=harness();const layout=subscriptionLayout(h);await h.start();
+    if(action==='subscription')await h.click(layout.subscription);
+    else{
+      await h.click(h.button,action!=='synthetic');const modal=await h.dialog();
+      await h.click(action==='cancel'?modal.cancel:modal.confirm,action!=='synthetic');
+      modal.dialog.remove();await h.change();
+    }
+    await h.advance(3000);assert.equal(h.proof().state,'following');
+    assert.deepEqual(h.observations().map(message=>message.phase),['following']);
+    assert.notEqual(h.state().phase,'removed');
+  }
+});
+
+test('a sticky subscription does not override the rendered offscreen native relationship state',async()=>{
+  const h=harness();const layout=subscriptionLayout(h);offscreen(h.name);offscreen(h.button);
+  await h.start();assert.equal(h.state().phase,'armed');
+  await layout.setFollowing(false);await h.advance(1999);
+  assert.equal(h.observations().length,1);await h.advance(1);
+  assert.equal(layout.subscription.getAttribute('data-testid'),'123-unfollow');
+  assert.equal(h.state().phase,'removed');assert.equal(h.observations().at(-1).phase,'reconcile');
+  assert.equal(h.observations().at(-1).proof.trustedAction,false);
+});
+
+for(const [label,attributes] of [
+  ['another numeric ID',{'data-testid':'456-follow','aria-label':'Requested @FableBirch'}],
+  ['another addressed handle',{'data-testid':'123-follow','aria-label':'Requested @TidalFox'}]
+]){
+  test('offscreen pending evidence for '+label+' remains fatal beside a valid visible sticky control',async()=>{
+    const h=harness();stickyHeader(h);offscreen(h.name);offscreen(h.button);
+    for(const [key,value] of Object.entries(attributes))h.button.setAttribute(key,value);
+    h.button.textContent='Requested';await h.start();await h.advance(2500);
+    assert.equal(h.state().phase,'stopped');assert.equal(h.observations().length,0);
+    assert.equal(h.proof().trustedAction,false);
+  });
+}
+
+test('a readable Following state restores the ready prompt after a temporary evidence gap',async()=>{
+  const h=harness();await h.start();
+  h.button.hidden=true;await h.change();await h.advance(750);
+  assert.match(h.state().reason,/等待可识别/);
+  h.button.hidden=false;await h.change();
+  assert.equal(h.state().phase,'armed');assert.equal(h.proof().state,'following');
+  assert.match(h.state().reason,/检测已就绪/);
+  const status=h.panel().find(element=>element.className==='status').textContent;
+  assert.match(status,/检测已就绪/);assert.doesNotMatch(status,/等待可识别/);
+  await h.advance(2000);
+  assert.deepEqual(h.observations().map(message=>message.phase),['following']);
+  assert.equal(h.state().phase,'armed');assert.equal(h.proof().trustedAction,false);
+});
