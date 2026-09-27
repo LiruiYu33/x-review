@@ -70,7 +70,7 @@
     if (closed || token !== generation) return Promise.resolve(false);
     return new Promise(resolve => {
       delayResolve = resolve;
-      delayTimer = setTimeout(() => { delayResolve = undefined; delayTimer = undefined; resolve(true); }, 3000);
+      delayTimer = setTimeout(() => { delayResolve = undefined; delayTimer = undefined; resolve(true); }, 1000);
     });
   }
   async function drive(runId, token) {

@@ -7,7 +7,10 @@
 
   root.createActivityService = function createActivityService(options) {
     const { core, enqueue, load, getFollowingScan, reconcileFollowingScan } = options;
-    const INTERVAL_MS = 1500;
+    const INTERVAL_MS = 500;
+    const RECENT_OBSERVATION_MS = 2000;
+    const RECENT_STABILITY_MS = 1000;
+    const STABILITY_MS = 1500;
     const MIN_OBSERVATION_MS = 5000;
     const MAX_OBSERVATION_MS = 25000;
     const ORIGINS = ['https://x.com/*'];
@@ -178,7 +181,7 @@
             Object.assign(run, { currentKey: record.key, currentLabel: labelFor(record), association: '',
               reason: '正在打开 ' + labelFor(record) + ' 的公开主页…', updatedAt: nowISO() });
             await chrome.storage.local.set({ activityRun: run });
-            return { run, record };
+            return { run, record, thresholdDays: data.thresholdDays };
           }
           run.index++;
           run.skipped++;
@@ -200,7 +203,7 @@
         evidence.sampleCount || 0, evidence.profileAtTop === true, evidence.hasUncertainReposts !== false]);
     }
 
-    async function observe(run, requested) {
+    async function observe(run, requested, thresholdDays) {
       const targetURL = core.profileUrl(requested);
       if (!targetURL || !profileRoute(targetURL)) throw Error('该账户的 X 主页链接无效。');
       if (!await guard(run.runId)) return null;
@@ -208,6 +211,7 @@
       if (!await guard(run.runId)) return null;
       const navigatedAt = Date.now();
       let acceptedHandle = '', previousSignature = '', matchingSince = 0, lastReason = '';
+      let installed = false, previousDocumentId = '';
       while (Date.now() - navigatedAt <= MAX_OBSERVATION_MS) {
         if (!await guard(run.runId)) return null;
         const tab = await chrome.tabs.get(run.scanTabId);
@@ -229,11 +233,24 @@
           }
           acceptedHandle = handle;
           try {
-            await chrome.scripting.executeScript({ target: { tabId: run.scanTabId }, files: ['reader.js', 'profile-probe.js'] });
-            if (!await guard(run.runId)) return null;
-            const [result] = await chrome.scripting.executeScript({ target: { tabId: run.scanTabId }, func: () => globalThis.XReviewProfileProbe() });
+            if (!installed) {
+              await chrome.scripting.executeScript({ target: { tabId: run.scanTabId }, files: ['reader.js', 'profile-probe.js'] });
+              installed = true;
+              if (!await guard(run.runId)) return null;
+            }
+            const [result] = await chrome.scripting.executeScript({ target: { tabId: run.scanTabId },
+              func: () => typeof globalThis.XReviewProfileProbe === 'function' && typeof globalThis.XReviewReadPage === 'function'
+                ? globalThis.XReviewProfileProbe() : null });
             if (!await guard(run.runId)) return null;
             const probe = result?.result;
+            // A reload may complete between samples. Never carry stability from
+            // the old document, and reinstall if the new document lacks a probe.
+            const documentId = result?.documentId || '';
+            if (documentId !== previousDocumentId) {
+              previousSignature = ''; matchingSince = 0;
+              previousDocumentId = documentId;
+            }
+            if (!probe) installed = false;
             if (probe?.state === 'blocked') {
               await stop(run.runId, probe.reason || 'X 显示登录、验证或访问限制；本轮检查已停止。');
               return null;
@@ -256,10 +273,16 @@
               }
             }
             if (probe?.state === 'ready' && probe.snapshot?.kind === 'profile' && captured) {
+              // Positive evidence within the threshold already rules out a
+              // candidate. Old or insufficient samples retain the longer wait.
+              const recent = core.classify(captured, thresholdDays).bucket === 'recent';
+              const minimum = recent ? RECENT_OBSERVATION_MS : MIN_OBSERVATION_MS;
+              const stability = recent ? RECENT_STABILITY_MS : STABILITY_MS;
               const nextSignature = signature(probe.snapshot);
               if (nextSignature !== previousSignature) { previousSignature = nextSignature; matchingSince = Date.now(); }
-              else if (Date.now() - matchingSince >= INTERVAL_MS && Date.now() - navigatedAt >= MIN_OBSERVATION_MS) {
+              else if (Date.now() - matchingSince >= stability && Date.now() - navigatedAt >= minimum) {
                 return { snapshot: probe.snapshot, reason: lastReason, finalHandle: acceptedHandle,
+                  recentOnly: recent,
                   association: requested.id && String(captured.id || '') !== requested.id ? 'stable-id-redirect' : '' };
               }
             } else {
@@ -271,8 +294,10 @@
           } catch (error) {
             if (!await guard(run.runId)) return null;
             lastReason = '页面正在切换或无法读取：' + String(error.message || error).slice(0, 160);
-            previousSignature = ''; matchingSince = 0;
+            installed = false; previousSignature = ''; matchingSince = 0;
           }
+        } else {
+          installed = false; previousSignature = ''; matchingSince = 0;
         }
         const remaining = MAX_OBSERVATION_MS - (Date.now() - navigatedAt);
         if (remaining <= 0) break;
@@ -312,6 +337,14 @@
           run.reason = '当前账户已处理或删除，已跳过。';
         } else {
           const captured = observation.snapshot?.record;
+          // The workspace can change its threshold while this tab is checking.
+          // A shortened positive check must never become a low-activity result.
+          if (observation.recentOnly && core.classify(captured, data.thresholdDays).bucket !== 'recent') {
+            Object.assign(run, { phase: 'stopped',
+              reason: '活跃度阈值已改变，快速检查结果不再符合近期发帖条件；本轮已停止，请重新开始。', updatedAt: nowISO() });
+            await chrome.storage.local.set({ activityRun: run });
+            return run;
+          }
           const provenID = fresh.id && String(captured?.id || '') === fresh.id;
           // An ID URL's redirect is a same-tab navigation association, not proof
           // obtained from an API. Do not overwrite a stored handle on that basis.
@@ -352,7 +385,7 @@
           if (!await guard(run.runId)) return getRun();
           const selected = await select(run.runId);
           if (!selected) return getRun();
-          const observation = await observe(selected.run, selected.record);
+          const observation = await observe(selected.run, selected.record, selected.thresholdDays);
           if (!observation) return getRun();
           return await commit(run.runId, selected.record, observation);
         } catch (error) {

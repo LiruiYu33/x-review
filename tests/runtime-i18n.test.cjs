@@ -36,7 +36,8 @@ test('previously stored completion reasons and nested failures render in English
     '本轮检查已完成：2 个账户获得可用观察，1 个仍为未知，另跳过 4 个已处理或已删除账户。其中 1 个数字 ID 账户按同标签页跳转关联观察，该关联属于导航推断。请回到工作台复核候选。',
     '检查已停止：X 要求登录，已停止本轮自动检查。',
     '本轮本地自动清理失败：自动清理保存失败，原记录与此前已保存的名单已保留。；本次加载不保证名单完整。',
-    '@review_owner · 已暂停 · 已保存 42 个账户'
+    '@review_owner · 已暂停 · 已保存 42 个账户',
+    '活跃度阈值已改变，快速检查结果不再符合近期发帖条件；本轮已停止，请重新开始。'
   ];
   for (const source of samples) assert.doesNotMatch(I.t(source), /\p{Script=Han}/u, source);
   assert.match(I.t(samples[5]), /@review_owner.*Paused.*42/);

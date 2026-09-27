@@ -204,6 +204,7 @@
     ['此主页没有可确认的公开发帖证据。', 'No public post evidence could be confirmed on this profile.'],
     ['页面正在切换或无法读取：{detail}', 'The page is changing or cannot be read: {detail}'],
     ['等待 25 秒后仍无稳定可用的公开帖子。', 'No stable, usable public posts were available after 25 seconds.'],
+    ['活跃度阈值已改变，快速检查结果不再符合近期发帖条件；本轮已停止，请重新开始。', 'The inactivity threshold changed and the quick check no longer establishes recent posting. This run has stopped; please start again.'],
     ['X 页面读取权限已撤销，检查已停止。', 'X page access was revoked. Checks stopped.'],
     ['保存前检查页面已跳转到其他账户或离开 X；已停止，未保存此次观察。', 'The checking tab changed accounts or left X before saving. Checks stopped and this observation was not saved.'],
     ['当前账户已处理或删除，已跳过。', 'The current account was reviewed or deleted and has been skipped.'],
