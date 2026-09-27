@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title data-i18n>记录 X 页面</title><link rel="stylesheet" href="styles.css"><script src="i18n.js" defer></script><script src="messages-workspace.js" defer></script><script src="messages-controls.js" defer></script><script src="messages-runtime.js" defer></script><script src="core.js" defer></script><script src="popup.js" defer></script></head>
+<body class="popup-body">
+  <div class="brand"><span class="brandmark">X</span><span><span data-i18n>关注整理</span><small>LOCAL WORKSPACE</small></span></div>
+  <label class="language-switch small"><span data-i18n>界面语言</span> <select id="language-select" aria-label="界面语言" data-i18n-aria-label><option value="zh-CN">中文</option><option value="en">English</option></select></label>
+  <h1 data-i18n>记录当前页面</h1>
+  <section id="auto-section" class="auto-section" aria-labelledby="auto-title" hidden>
+    <div class="auto-heading"><h2 id="auto-title" data-i18n>自动收集关注名单</h2><span id="scan-phase" class="badge">未开始</span></div>
+    <p id="auto-owner" class="muted"></p>
+    <p class="small muted" data-i18n>自动滚动并保存名单。完成后点击「自动检查发帖时间」补充记录。保持此标签页可见；切走会暂停，回来继续。</p>
+    <label class="auto-confirm-label"><input id="auto-confirm" type="checkbox"><span data-i18n>这是我自己的正在关注列表</span></label>
+    <p class="small muted" data-i18n>点击开始后，自然收集结束时会自动清理本轮列表未出现且符合条件的旧本地记录；不取关，可在同步记录中撤销。</p>
+    <div class="scan-actions"><button class="button primary" id="scan-start" disabled data-i18n>开始自动收集</button><button class="button" id="scan-stop" disabled data-i18n>停止</button></div>
+    <div id="scan-progress" class="scan-progress" hidden>
+      <p><span data-i18n>本次已收集</span> <strong id="scan-collected">0</strong> / <span data-i18n>新增</span> <strong id="scan-added">0</strong></p>
+      <p class="muted"><span data-i18n>已滚动</span> <span id="scan-steps">0</span> <span data-i18n>次</span></p>
+    </div>
+    <p id="scan-status" class="small" role="status" aria-live="polite">勾选确认后开始；打开扩展不会自动运行。</p>
+    <p class="small muted" data-i18n>可关闭此弹窗，进度会继续显示在 X 页内。自动滚动涉及 X 的非 API 自动化规则，无法保证账户不受限制。</p>
+  </section>
+  <section class="manual-section" aria-labelledby="manual-title">
+    <h2 id="manual-title" data-i18n>手动记录一次</h2>
+    <p class="muted" data-i18n>打开自己的正在关注列表，或账户的「帖子」页。读取本次已加载的内容，并由你确认保存。</p>
+    <button class="button primary" id="capture" data-i18n>读取当前页面</button>
+    <div id="preview" class="preview" hidden></div>
+    <label id="following-check" hidden><input id="following-confirm" type="checkbox"><span data-i18n>这是我自己的正在关注列表</span></label>
+    <label id="link-check" hidden><input id="link-confirm" type="checkbox"><span id="link-label"></span></label>
+    <button class="button primary" id="save" hidden>保存观察</button>
+    <p id="popup-status" class="small" role="status" aria-live="polite"></p>
+  </section>
+  <div class="popup-bottom"><button class="button" id="following-sync-open" data-i18n>查看同步记录</button><button class="button primary" id="activity-open" data-i18n>自动检查发帖时间</button><button class="button" id="activity-stop" hidden data-i18n>停止发帖时间检查</button><p id="activity-popup-status" class="small" role="status" aria-live="polite" hidden></p><button class="button" id="dashboard" data-i18n>打开整理工作台</button><p class="small muted" data-i18n>名单只存在本机。工具不执行取关，也无法保证 X 不限制账号。</p></div>
+</body>
+</html>

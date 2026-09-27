@@ -1,0 +1,26 @@
+# Local operating-system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Dependencies, temporary output, and generated packages
+node_modules/
+coverage/
+test-results/
+playwright-report/
+work/
+outputs/
+*.log
+*.zip
+
+# Local credentials, browser profiles, and exported account data
+.env
+.env.*
+!.env.example
+browser-profile/
+user-data-dir/
+x-review-backup*.json
+x-review-candidates*.csv
+following.js

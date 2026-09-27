@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title data-i18n>自动检查发帖时间 · X 关注整理</title>
+  <link rel="stylesheet" href="styles.css"><script src="i18n.js" defer></script><script src="messages-workspace.js" defer></script><script src="messages-controls.js" defer></script><script src="messages-runtime.js" defer></script><script src="activity.js" defer></script>
+</head>
+<body class="activity-body">
+  <div class="activity-shell">
+    <header class="activity-header"><a class="brand" href="index.html"><span class="brandmark">X</span><span><span data-i18n>关注整理</span><small>LOCAL WORKSPACE</small></span></a><a class="text-button" href="index.html" target="_blank" rel="noopener noreferrer" data-i18n>打开整理工作台</a><label class="language-switch small"><span data-i18n>界面语言</span> <select id="language-select" aria-label="界面语言" data-i18n-aria-label><option value="zh-CN">中文</option><option value="en">English</option></select></label></header>
+    <p class="eyebrow" data-i18n>第二步 · 补充发帖记录</p><h1 data-i18n>自动检查发帖时间</h1>
+    <p class="activity-intro muted" data-i18n>从已保存的关注名单出发，逐个打开 X 主页，记录页面中可见的发帖时间。检查完成后，再到工作台筛选并人工决定是否取关。</p>
+    <p id="activity-unavailable" class="mode-banner" hidden data-i18n>自动检查只可在已安装的浏览器扩展中使用。请通过扩展弹窗打开此页面；独立网页仍可使用名单导入和人工记录。</p>
+    <section class="activity-card" aria-labelledby="activity-settings-title">
+      <div class="activity-card-heading"><h2 id="activity-settings-title" data-i18n>本轮检查范围</h2><span id="activity-phase" class="badge">未开始</span></div>
+      <div class="activity-settings">
+        <label for="activity-mode"><span data-i18n>检查对象</span><select id="activity-mode"><option value="missing" data-i18n>补充缺少或过期的记录</option><option value="all" data-i18n>重新检查全部待审账户</option></select></label>
+        <label for="activity-limit"><span data-i18n>本轮最多检查</span><input id="activity-limit" type="number" min="1" max="5000" step="1" value="5000"><span class="muted" data-i18n>个账户</span></label>
+      </div>
+      <p class="small muted" data-i18n>两种范围都跳过「保留」和「已处理」账户。默认最多 5,000 个，实际以可检查的账户数为准。每个账户读取后间隔 3 秒，再加上页面加载时间；大量账户可能需要较长时间，可改小数量或随时停止。</p>
+      <div class="activity-permission"><strong data-i18n>开始时需要你的浏览器授权</strong><p><span data-i18n>自动打开后续主页需要额外的 X 网站访问权限。首次开始时，浏览器会询问是否允许访问 x.com；拒绝授权不会启动检查。授权后仍须由你点击开始，不会在打开本页时自行运行。</span></p></div>
+      <div class="activity-actions"><button id="activity-start" class="button primary" disabled data-i18n>开始检查</button><button id="activity-stop" class="button" disabled data-i18n>停止检查</button><button id="activity-show-controller" class="text-button" hidden data-i18n>查看正在运行的控制页</button></div>
+    </section>
+    <section class="activity-card" aria-labelledby="activity-progress-title">
+      <div class="activity-card-heading"><h2 id="activity-progress-title" data-i18n>检查进度</h2><span id="activity-total" class="muted">尚未开始</span></div>
+      <div class="activity-counts"><div><span data-i18n>已检查</span><strong id="activity-completed">0</strong></div><div><span data-i18n>取得发帖记录</span><strong id="activity-read">0</strong></div><div><span data-i18n>仍需核实</span><strong id="activity-unknown">0</strong></div></div>
+      <progress id="activity-progress" max="1" value="0" aria-label="账户检查进度" data-i18n-aria-label></progress>
+      <p id="activity-skipped" class="small muted" hidden></p>
+      <p class="activity-current"><span data-i18n>当前账户：</span><strong id="activity-current">—</strong></p>
+      <p id="activity-status" role="status" aria-live="polite">正在读取本地检查状态…</p>
+      <a id="activity-results" class="button" href="index.html" target="_blank" rel="noopener noreferrer" hidden data-i18n>到工作台查看结果</a>
+    </section>
+    <div class="activity-notes"><p><strong data-i18n>检查期间请保留此控制页和新打开的 X 标签页。</strong><span data-i18n>工具会在同一个 X 标签页中依次切换账户；不要手动改变该标签页的地址。关闭或刷新控制页会停止本轮检查，已保存记录会保留；也可从扩展弹窗停止。后台标签页计时可能受到浏览器限制，实际速度会更慢。</span></p><p><span data-i18n>读取不到帖子、受保护账户、登录提示或页面错误不会被当作不活跃。页面样本可能不完整，取得记录也不代表已确认账户停用。工具不执行取关；自动打开和读取 X 页面涉及平台的非 API 自动化规则，不能保证账户不受限制。</span><a href="https://help.x.com/en/rules-and-policies/x-automation" target="_blank" rel="noopener noreferrer" data-i18n>查看 X 自动化规则</a></p></div>
+  </div>
+</body>
+</html>
