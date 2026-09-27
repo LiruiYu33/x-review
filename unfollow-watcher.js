@@ -171,7 +171,7 @@
     setText(status, t(run.reason));
     setText(detail, t(['stopped', 'failed'].includes(run.phase)
       ? '检测已结束，继续等待不会更新记录。请回到工作台重新打开此账户以核实当前状态；无需重新关注。'
-      : '等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。'));
+      : '等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开；核实并保存本地更新后，窗口会自动关闭。'));
     const hideDetail = ['removed', 'retained'].includes(run.phase) || run.reconcileSince > 0;
     if (detail.hidden !== hideDetail) detail.hidden = hideDetail;
     setText(close, t(active(run) ? '停止检测' : '关闭提示'));

@@ -7,7 +7,7 @@
   root.createManualUnfollowService = function ({core, enqueue, load}) {
     const KEY = 'manualUnfollow', UNDO = 'manualUnfollowUndo';
     const MAX_MS = 10 * 60 * 1000;
-    const attaching = new Set();
+    const attaching = new Set(), closing = new Set();
     const active = run => run && ['opening', 'watching', 'armed'].includes(run.phase);
     const fresh = run => active(run) && Date.now() < Date.parse(run.expiresAt);
     const get = async () => (await chrome.storage.local.get(KEY))[KEY] || null;
@@ -131,6 +131,24 @@
       if (!run || run.runId !== message.runId || sender.id !== chrome.runtime.id || sender.tab?.id !== run.tabId || sender.frameId !== 0 || typeof sender.documentId !== 'string' || (run.documentId && run.documentId !== sender.documentId)) throw Error('取关观察会话已失效。');
       return cancel(run.runId, typeof message.reason === 'string' ? message.reason.slice(0, 500) : '未能确认取关，本地记录已保留。');
     }
+    async function closeCompletedTab(completed) {
+      if (closing.has(completed.runId)) return;
+      closing.add(completed.runId);
+      // Only close the tab created for this run, after removal and undo are
+      // durably saved. Removing that tab closes its otherwise empty popup,
+      // without touching any additional tabs the user may have placed there.
+      try {
+        const isCurrent = run => run?.runId === completed.runId && run.phase === 'removed'
+          && run.tabId === completed.tabId && run.windowId === completed.windowId;
+        if (!Number.isInteger(completed.tabId) || !Number.isInteger(completed.windowId) || !isCurrent(await get())) return;
+        const tab = await chrome.tabs.get(completed.tabId), destination = route(tab.url);
+        if (tab.windowId !== completed.windowId || tab.pendingUrl || tab.status !== 'complete'
+          || !destination?.handle || !sameHandle(destination.handle, completed.handle)) return;
+        if (!isCurrent(await get())) return;
+        await chrome.tabs.remove(completed.tabId);
+      } catch { /* A closed or unavailable tab must not undo a saved removal. */ }
+      finally { closing.delete(completed.runId); }
+    }
     async function observed(message, sender) {
       const initial = await get();
       if (!initial || initial.runId !== message.runId || sender.id !== chrome.runtime.id || sender.tab?.id !== initial.tabId || sender.frameId !== 0 || typeof sender.documentId !== 'string') throw Error('取关观察会话已失效。');
@@ -155,7 +173,7 @@
         if (!await permission()) throw Error('X 页面读取权限已撤销，本地记录已保留。');
       }
       await verifyCurrent();
-      return enqueue(async () => {
+      const result = await enqueue(async () => {
         const run = await get();
         if (!run || run.runId !== initial.runId) throw Error('取关观察会话已失效。');
         if (!fresh(run)) return publicRun(run);
@@ -202,6 +220,10 @@
         }
         return publicRun(removed);
       });
+      // Closing fires tabRemoved, which also uses the write queue. Keep it
+      // outside that queue and preserve the committed terminal result.
+      if (result?.phase === 'removed') await closeCompletedTab(result);
+      return result;
     }
     async function undo() {
       return enqueue(async () => {

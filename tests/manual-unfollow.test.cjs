@@ -8,15 +8,26 @@ const core = require('../core.js');
 function harness(overrides = {}) {
   const original = core.normaliseRecord({handle:'target',followingOwners:['owner'],...overrides});
   const stored = {reviewData:{schemaVersion:1,thresholdDays:180,records:[original,core.normaliseRecord({handle:'other'})]}};
-  let queue = Promise.resolve(), proof = null, permitted = true, exists = true, failRemoval = false, probeReads = 0, probeHook;
-  const writes = [], windows = [], events = {};
+  let proof = null, permitted = true, exists = true, failRemoval = false, failClose = false, probeReads = 0, probeHook, closeCheckHook;
+  const writes = [], windows = [], closes = [], events = {};
   const tab = {id:11,windowId:22,url:'https://x.com/target',status:'loading'};
   const chrome = {
     runtime:{id:'test',getURL:file=>'chrome-extension://test/'+file,onMessage:{addListener:fn=>events.message=fn},onStartup:{addListener:fn=>events.startup=fn}},
     storage:{local:{get:async key=>({[key]:structuredClone(stored[key])}),set:async values=>{if(failRemoval && values.manualUnfollow?.phase==='removed') throw Error('disk full'); writes.push(structuredClone(values));Object.assign(stored,structuredClone(values));},remove:async key=>delete stored[key]}},
     permissions:{contains:async()=>permitted},
     windows:{create:async options=>{windows.push(options);return{id:22,tabs:[{...tab}]};},update:async()=>({id:22})},
-    tabs:{get:async()=>{if(!exists)throw Error('closed');return {...tab};},query:async()=>[{...tab}],onRemoved:{addListener:fn=>events.removed=fn},onUpdated:{addListener:fn=>events.updated=fn}},
+    tabs:{get:async()=>{
+      if(closeCheckHook && stored.manualUnfollow?.phase==='removed'){
+        const hook=closeCheckHook;closeCheckHook=null;await hook();
+      }
+      if(!exists)throw Error('closed');return {...tab};
+    },remove:async tabId=>{
+      closes.push({tabId,stored:structuredClone(stored)});
+      if(failClose)throw Error('close rejected');
+      exists=false;
+      // Awaiting the listener exposes an accidental shared-write-queue deadlock.
+      await events.removed(tabId);
+    },query:async()=>[{...tab}],onRemoved:{addListener:fn=>events.removed=fn},onUpdated:{addListener:fn=>events.updated=fn}},
     scripting:{executeScript:async options=>{if(options.files)return [];if(options.target.documentIds){probeReads++;if(probeHook)probeHook(probeReads);return[{documentId:options.target.documentIds[0],result:structuredClone(proof)}];}return[{result:null}];}}
   };
   const context=vm.createContext({chrome,URL,Date,console,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout});
@@ -34,8 +45,9 @@ function harness(overrides = {}) {
       ...(phase==='reconcile'?{observationKind:'already-not-following'}:{})};
     return send({type:'UNFOLLOW_OBSERVED',phase,...identity},from);
   }
-  return {stored,writes,windows,tab,events,page,sender,original,send,begin,observe,
+  return {stored,writes,windows,closes,tab,events,page,sender,original,send,begin,observe,
     permission:value=>permitted=value,exists:value=>exists=value,failRemoval:()=>failRemoval=true,
+    failClose:()=>failClose=true,beforeCloseCheck:fn=>closeCheckHook=fn,
     mutateProof:fn=>probeHook=fn,proof:()=>proof,setProof:value=>proof=value};
 }
 const hasTarget=h=>h.stored.reviewData.records.some(record=>record.key===h.original.key);
@@ -223,4 +235,139 @@ test('clear erases manual undo and makes late observations unable to restore or 
   const h=harness();await h.begin();await h.observe('following');await h.observe('confirmed');await h.send({type:'CLEAR'});
   assert.equal(h.stored.manualUnfollowUndo,null);assert.equal(h.stored.reviewData.records.length,0);
   await h.observe('confirmed');await h.send({type:'UNFOLLOW_UNDO'});assert.equal(h.stored.reviewData.records.length,0);
+});
+
+
+for(const phase of ['confirmed','reconcile']){
+  test(phase+' closes only the dedicated tab after local removal and its undo have been saved',{timeout:2000},async()=>{
+    const h=harness();const run=await h.begin();
+    assert.equal(h.closes.length,0);
+    if(phase==='confirmed'){
+      await h.observe('following');
+      assert.equal(h.closes.length,0);
+    }
+    const done=await h.observe(phase);
+    assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+    assert.equal(h.closes.length,1);assert.equal(h.closes[0].tabId,run.tabId);
+    const atClose=h.closes[0].stored;
+    assert.equal(atClose.manualUnfollow.phase,'removed');
+    assert.equal(atClose.manualUnfollow.runId,run.runId);
+    assert.equal(atClose.manualUnfollowUndo.runId,run.runId);
+    assert.equal(atClose.manualUnfollowUndo.record.key,h.original.key);
+    assert.equal(atClose.reviewData.records.some(record=>record.key===h.original.key),false);
+    assert.equal(atClose.reviewData.records.length,1);
+    // tabs.remove delivers onRemoved before resolving in this fixture; that
+    // lifecycle event must leave the successful result and undo intact.
+    assert.equal(h.stored.manualUnfollow.phase,'removed');
+    assert.equal(h.stored.manualUnfollowUndo.runId,run.runId);
+    assert.equal((await h.send({type:'UNFOLLOW_STATUS'})).data.canUndo,true);
+    assert.equal((await h.send({type:'UNFOLLOW_UNDO'})).data.restored,1);
+    assert.equal(hasTarget(h),true);
+    await h.observe(phase);
+    assert.equal(h.closes.length,1);
+  });
+
+  test(phase+' completion does not close twice when a duplicate message arrives',{timeout:2000},async()=>{
+    const h=harness();await h.begin();
+    if(phase==='confirmed')await h.observe('following');
+    await h.observe(phase);await h.observe(phase);
+    assert.equal(h.closes.length,1);
+    assert.equal(h.stored.manualUnfollow.phase,'removed');
+    assert.equal(hasTarget(h),false);
+  });
+
+  test('a rejected tab close preserves the successful '+phase+' removal and undo',{timeout:2000},async()=>{
+    const h=harness();await h.begin();h.failClose();
+    if(phase==='confirmed')await h.observe('following');
+    const done=await h.observe(phase);
+    assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+    assert.equal(h.closes.length,1);assert.equal(hasTarget(h),false);
+    assert.equal(h.stored.manualUnfollow.phase,'removed');
+    assert.equal(h.stored.manualUnfollowUndo.record.key,h.original.key);
+    assert.equal((await h.send({type:'UNFOLLOW_STATUS'})).data.canUndo,true);
+    await h.observe(phase);
+    assert.equal(h.closes.length,1);
+  });
+}
+
+for(const outcome of ['armed','cancelled','retained','failed storage','invalid evidence']){
+  test(outcome+' leaves the native popup open',{timeout:2000},async()=>{
+    const h=harness();await h.begin();await h.observe('following');
+    if(outcome==='cancelled'){
+      await h.send({type:'UNFOLLOW_CANCEL'});await h.observe('confirmed');
+    }else if(outcome==='retained'){
+      await h.send({type:'STATUS',key:h.original.key,status:'keep'});
+      assert.equal((await h.observe('confirmed')).data.phase,'retained');
+    }else if(outcome==='failed storage'){
+      h.failRemoval();assert.equal((await h.observe('confirmed')).data.phase,'failed');
+    }else if(outcome==='invalid evidence'){
+      h.mutateProof(()=>{h.proof().trustedAction=false;});
+      assert.equal((await h.observe('confirmed')).ok,false);
+    }
+    assert.equal(h.closes.length,0);assert.equal(hasTarget(h),true);
+  });
+}
+
+for(const [name,change] of [
+  ['moved to a different window',{windowId:99}],
+  ['navigated to a different profile',{url:'https://x.com/other'}],
+  ['navigated to another route on the same profile',{url:'https://x.com/target/following'}],
+  ['started a pending navigation',{pendingUrl:'https://x.com/other'}],
+  ['started loading',{status:'loading'}]
+]){
+  test('a popup '+name+' after removal is kept open',{timeout:2000},async()=>{
+    const h=harness();const run=await h.begin();await h.observe('following');
+    h.beforeCloseCheck(()=>Object.assign(h.tab,change));
+    const done=await h.observe('confirmed');
+    assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+    assert.equal(h.closes.length,0);assert.equal(hasTarget(h),false);
+    assert.equal(h.stored.manualUnfollowUndo.runId,run.runId);
+  });
+}
+
+test('a tab already closed after storage success does not turn removal into failure',{timeout:2000},async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  h.beforeCloseCheck(()=>h.exists(false));
+  const done=await h.observe('confirmed');
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
+  assert.equal(h.closes.length,0);assert.equal(hasTarget(h),false);
+  assert.equal(h.stored.manualUnfollow.phase,'removed');
+  assert.equal(h.stored.manualUnfollowUndo.record.key,h.original.key);
+});
+
+test('undo during the asynchronous close check keeps the restored record and window',{timeout:2000},async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  let restored;
+  h.beforeCloseCheck(async()=>{restored=await h.send({type:'UNFOLLOW_UNDO'});});
+  const done=await h.observe('confirmed');
+  assert.equal(done.ok,true);assert.equal(restored.data.restored,1);
+  assert.equal(h.closes.length,0);assert.equal(hasTarget(h),true);
+  assert.equal(h.stored.manualUnfollow.phase,'retained');
+  assert.equal(h.stored.manualUnfollowUndo,null);
+});
+
+test('a new session begun during the close check cannot have its tab closed by the completed session',{timeout:2000},async()=>{
+  const h=harness();const previous=await h.begin();await h.observe('following');
+  let next;
+  h.beforeCloseCheck(async()=>{
+    h.tab.url='https://x.com/other';
+    const other=h.stored.reviewData.records.find(record=>record.handle==='other');
+    next=await h.send({type:'UNFOLLOW_BEGIN',key:other.key});
+  });
+  const done=await h.observe('confirmed');
+  assert.equal(done.ok,true);assert.equal(next.ok,true);
+  assert.notEqual(next.data.runId,previous.runId);
+  assert.equal(h.stored.manualUnfollow.runId,next.data.runId);
+  assert.equal(h.stored.manualUnfollow.phase,'watching');
+  assert.equal(h.closes.length,0);assert.equal(hasTarget(h),false);
+  assert.equal(h.stored.manualUnfollowUndo.runId,previous.runId);
+});
+
+test('overlapping successful completion handlers close the popup only once',{timeout:2000},async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  const replies=await Promise.all([h.observe('confirmed'),h.observe('confirmed')]);
+  assert.equal(replies.every(reply=>reply.ok && reply.data.phase==='removed'),true);
+  assert.equal(h.closes.length,1);assert.equal(hasTarget(h),false);
+  assert.equal(h.stored.manualUnfollow.phase,'removed');
+  assert.equal(h.stored.manualUnfollowUndo.record.key,h.original.key);
 });
