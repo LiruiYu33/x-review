@@ -33,17 +33,18 @@
     const label = String(button.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
     const text = textOf(button), numeric = (button.getAttribute('data-testid') || '').match(/^(\d+)-(unfollow|follow)$/);
     const addressed = label.match(/^(.+?)\s+@([A-Za-z0-9_]{1,15})$/);
+    const addressedHandle = addressed ? handleOf(addressed[2]) : '';
     const pending = /^(?:requested|pending|follow request (?:pending|sent)|cancel (?:follow )?request(?: to)?|已请求|已請求|请求中|請求中|取消(?:关注|關注)?请求|取消(?:关注|關注)?請求)$/i;
     // A pending request is not a not-following observation. During redraw X
     // may update visible text before its accessible label (or vice versa).
     if (pending.test(text) || pending.test(addressed ? addressed[1] : label)) {
-      return {button, state: '', id: '', conflict: false, pending: true};
+      return {button, state: '', id: numeric ? numeric[1] : '',
+        conflict: Boolean(addressedHandle && addressedHandle !== handle), pending: true};
     }
     const labelAction = actionState(addressed ? addressed[1] : label), textAction = actionState(text);
     const subscription = /^(?:subscribe(?:d)?(?: to)?|订阅(?: 到| 至)?|訂閱(?: 到| 至)?|已订阅|已訂閱)$/i;
     const subscriptionLabel = subscription.test(addressed ? addressed[1] : label);
     const paid = subscriptionLabel || subscription.test(text);
-    const addressedHandle = addressed ? handleOf(addressed[2]) : '';
     // X uses a numeric "-unfollow" test ID on its paid Subscribe button too.
     // It can establish identity only when explicitly addressed to this profile;
     // it can never establish a following relationship or a trusted native action.
@@ -52,9 +53,10 @@
     const state = labelAction || textAction;
     if (!state) return {button, state: '', id: '', conflict: false};
     const suffixState = numeric ? (numeric[2] === 'unfollow' ? 'following' : 'follow') : '';
-    return {button, state, id: numeric ? numeric[1] : '', conflict: Boolean(
-      (addressedHandle && addressedHandle !== handle) || (labelAction && textAction && labelAction !== textAction)
-      || (suffixState && suffixState !== state)),
+    return {button, state, id: numeric ? numeric[1] : '', conflict: Boolean(addressedHandle && addressedHandle !== handle),
+      // React can update text, accessible labels and test IDs in separate steps.
+      // A state disagreement pauses observation; it is not an identity change.
+      pending: Boolean((labelAction && textAction && labelAction !== textAction) || (suffixState && suffixState !== state)),
       // An icon-only control needs an explicit target-bound action label.
       identifiable: Boolean(numeric || (labelAction && addressedHandle === handle))};
   }
@@ -88,37 +90,45 @@
     if (!handle || blocked()) return unknown;
     const root = document.querySelector('main [data-testid="primaryColumn"],main[data-testid="primaryColumn"],main');
     if (!root) return unknown;
-    const names = [...root.querySelectorAll('[data-testid="UserName"]')].filter(node => !node.closest(EXCLUDED) && visible(node));
-    // A single visible profile identity prevents recommendation or stale-page attribution.
-    if (names.length !== 1) return names.length > 1 ? conflict('页面显示多个账户标题，本地记录未删除。') : unknown;
-    const namedHandles = new Set([...textOf(names[0]).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
-    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict('账户标题与主页地址不一致，本地记录未删除。') : unknown;
-    const nameRect = names[0].getBoundingClientRect(), boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
+    const boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
+    const inHeader = node => !node.closest(EXCLUDED)
+      && (!boundary || Boolean(node.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING));
+    // Scrolling leaves the main identity rendered offscreen while X adds a
+    // sticky action bar. Both belong to the same bounded profile header.
+    const names = [...root.querySelectorAll('[data-testid="UserName"]')].filter(node => inHeader(node) && rendered(node));
+    if (!names.length) return unknown;
+    for (const name of names) {
+      const namedHandles = new Set([...textOf(name).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
+      if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict('账户标题与主页地址不一致，本地记录未删除。') : unknown;
+    }
+    const nameRect = names[0].getBoundingClientRect();
     const buttons = [...root.querySelectorAll('button,[role="button"]')].filter(node => {
       // Exclude timeline controls before asking the browser for their layout.
-      if (node.closest(EXCLUDED)) return false;
-      if (boundary && !(node.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
-      if (!visible(node)) return false;
-      const rect = node.getBoundingClientRect();
-      return Math.abs(rect.top - nameRect.top) < 600;
+      if (!inHeader(node) || !rendered(node)) return false;
+      // Without a timeline boundary, retain the local profile-header bound.
+      return Boolean(boundary) || Math.abs(node.getBoundingClientRect().top - nameRect.top) < 600;
     });
     const controls = buttons.map(button => controlEvidence(button, handle));
     if (controls.some(control => control.conflict)) return conflict('关注控件的账户或状态证据不一致，本地记录未删除。');
-    if (controls.some(control => control.pending)) return unknown;
-    const relations = controls.filter(control => control.state);
-    if (relations.length !== 1) return relations.length > 1 ? conflict('页面显示多个关注控件，本地记录未删除。') : unknown;
-    const selected = relations[0], button = selected.button;
-    if (!selected.identifiable) return unknown;
-    // A native request still in progress cannot establish a stable follow state.
-    if (button.getAttribute('disabled') !== null || button.getAttribute('aria-disabled') === 'true'
-      || button.getAttribute('aria-busy') === 'true') return unknown;
+    // Identity always uses fresh rendered evidence, including the main header.
+    // Never substitute a cached ID when only an unbound sticky button remains.
     const ids = new Set(controls.map(control => control.id).filter(Boolean));
     if (ids.size > 1) return conflict('账户数字 ID 证据不一致，本地记录未删除。');
     if (!ids.size) return unknown;
     const id = [...ids][0];
     if ((run.targetId && id !== run.targetId) || (run.id && id !== run.id)) return conflict('账户数字 ID 与本地目标不一致，本地记录未删除。');
+    const relationships = controls.filter(control => control.state || control.pending);
+    const onScreen = relationships.filter(control => visible(control.button));
+    // Prefer the controls the user can operate. A stale offscreen copy must not
+    // override the sticky bar. Some profiles have only a paid sticky Subscribe
+    // button; in that case the rendered main relationship is still evidence.
+    const selected = onScreen.length ? onScreen : relationships;
+    if (!selected.length || selected.some(control => control.pending || !control.identifiable)) return unknown;
+    if (new Set(selected.map(control => control.state)).size !== 1) return unknown;
+    if (selected.some(({button}) => button.getAttribute('disabled') !== null
+      || button.getAttribute('aria-disabled') === 'true' || button.getAttribute('aria-busy') === 'true')) return unknown;
     if (!owner) return unknown;
-    return {handle, id, viewer: owner, state: selected.state, button};
+    return {handle, id, viewer: owner, state: selected[0].state, buttons: selected.map(control => control.button)};
   }
   function dialogs() { return [...document.querySelectorAll(DIALOGS)].filter(visible); }
   function expectedDialog(run, node) {
@@ -144,7 +154,7 @@
     const observable = active(run) && !run.identityConflict && state.state === 'follow' && !document.hidden && !dialogs().length;
     if (!observable) { run.followSince = 0; resetReconciliation(run); }
     const eligible = observable && run.armed && trustedIntent(run) && !run.unknownSince;
-    const reconcile = observable && !run.armed && run.reconcileSince > 0;
+    const reconcile = observable && !eligible && run.reconcileSince > 0;
     return {runId: run.runId, handle: state.handle, id: state.id, viewer: state.viewer, state: state.state,
       observationKind: reconcile ? 'already-not-following' : 'manual-unfollow', trustedAction: Boolean(eligible),
       stableFor: eligible && run.followSince ? Math.max(0, Date.now() - run.followSince)
@@ -224,10 +234,26 @@
       if (state.conflict) end(run, 'stopped', state.reason || '账户身份发生变化或存在冲突，本地记录未删除。');
       return;
     }
-    if (button === state.button && state.state === 'following' && !dialogs().length) {
+    if (state.buttons?.includes(button) && visible(button) && state.state === 'following' && !dialogs().length) {
       run.intent = {at: Date.now(), dialogSeen: false, confirmed: false}; run.followSince = 0; run.unknownSince = 0;
       run.reason = '等待你完成 X 的取消关注操作…'; render(run); return;
     }
+  }
+  async function reconcile(run) {
+    clearIntent(run);
+    if (!run.reconcileSince) run.reconcileSince = Date.now();
+    run.reason = '页面显示已未关注，正在核实账户身份并同步本地记录…'; render(run);
+    if (Date.now() - run.reconcileSince < RECONCILE_STABLE_MS || Date.now() < run.retryAt) return;
+    run.busy = true; run.phase = 'verifying';
+    try {
+      const data = await report(run, 'reconcile');
+      if (!active(run)) return;
+      if (data.phase === 'removed') end(run, 'removed', data.reason || '已核实当前未关注，本地记录已移除。现在可以关闭窗口。');
+      else if (['retained', 'cancelled', 'failed'].includes(data.phase)) end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '本地记录未删除，请回到工作台检查。');
+      else throw new Error('扩展尚未确认保存，本地删除结果未知。');
+    } catch (error) {
+      if (active(run)) { resetReconciliation(run); run.phase = run.armed ? 'armed' : 'watching'; run.reason = '尚未确认本地更新：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
+    } finally { run.busy = false; }
   }
   async function tick(run) {
     if (!active(run) || run.busy) return;
@@ -249,6 +275,7 @@
     }
     const state = read(run);
     if (state.state === 'unknown') {
+      run.awaitingEvidence = true;
       run.followSince = 0; resetReconciliation(run);
       if (state.conflict) return end(run, 'stopped', state.reason || '账户身份发生变化或存在冲突，本地记录未删除。');
       // X may briefly remove its profile controls while applying the native action.
@@ -257,37 +284,24 @@
         if (!run.unknownSince) run.unknownSince = Date.now();
         if (Date.now() - run.unknownSince >= TRANSIENT_MS) {
           clearIntent(run);
-          return end(run, 'stopped', '取消关注后页面状态持续无法识别，本地记录已保留。请从工作台重新打开以核实当前状态。');
+          // The click trail has expired, but the same bound session can still
+          // reconcile a later stable Follow state without reopening the page.
         }
       } else clearIntent(run);
-      if (!run.armed && Date.now() - run.startedAt > 25000) return end(run, 'stopped', '未能识别账户主页或关注状态，本地记录已保留。请从工作台重新打开。');
+      if (!run.handle && Date.now() - run.startedAt > 25000) return end(run, 'stopped', '未能识别账户主页或关注状态，本地记录已保留。请从工作台重新打开。');
       run.reason = '等待可识别的账户主页、登录账户和关注按钮；尚未删除本地记录。'; render(run); return;
     }
     if (run.unknownSince && Date.now() - run.unknownSince >= TRANSIENT_MS) {
       clearIntent(run);
-      return end(run, 'stopped', '取消关注后页面状态持续无法识别，本地记录已保留。请从工作台重新打开以核实当前状态。');
+      // Long redraws fall back to owner-bound current-state reconciliation.
     }
+    const resumedEvidence = run.awaitingEvidence; run.awaitingEvidence = false;
     run.unknownSince = 0;
     if (!run.armed) {
       // Pin identity before either initial-state reconciliation or the async arm
       // handshake. A later mismatch must never restart under a different identity.
       run.handle = state.handle; run.id = state.id; run.viewer = state.viewer;
-      if (state.state === 'follow') {
-        if (!run.reconcileSince) run.reconcileSince = Date.now();
-        run.reason = '页面显示已未关注，正在核实账户身份并同步本地记录…'; render(run);
-        if (Date.now() - run.reconcileSince < RECONCILE_STABLE_MS || Date.now() < run.retryAt) return;
-        run.busy = true; run.phase = 'verifying';
-        try {
-          const data = await report(run, 'reconcile');
-          if (!active(run)) return;
-          if (data.phase === 'removed') end(run, 'removed', data.reason || '已核实当前未关注，本地记录已移除。现在可以关闭窗口。');
-          else if (['retained', 'cancelled', 'failed'].includes(data.phase)) end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '本地记录未删除，请回到工作台检查。');
-          else throw new Error('扩展尚未确认保存，本地删除结果未知。');
-        } catch (error) {
-          if (active(run)) { resetReconciliation(run); run.phase = 'watching'; run.reason = '尚未确认本地更新：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
-        } finally { run.busy = false; }
-        return;
-      }
+      if (state.state === 'follow') return reconcile(run);
       resetReconciliation(run);
       if (Date.now() < run.retryAt) return;
       run.busy = true;
@@ -307,19 +321,19 @@
       return;
     }
     if (state.state === 'following') {
-      const wasVerifying = run.followSince > 0;
-      run.followSince = 0;
+      const wasVerifying = run.followSince > 0 || run.reconcileSince > 0;
+      run.followSince = 0; resetReconciliation(run);
       if (run.intent?.dialogSeen && !run.intent.confirmed) {
         clearIntent(run); run.reason = '操作已取消，本地记录保留。你可以再次手动取消关注。'; render(run);
       } else if (wasVerifying) {
         run.reason = '页面恢复为正在关注，本地记录未删除。请在 X 页面核实取关结果。'; render(run);
+      } else if (resumedEvidence) {
+        run.reason = trustedIntent(run) ? '等待你完成 X 的取消关注操作…' : '检测已就绪，请在 X 页面手动取消关注。'; render(run);
       }
       return;
     }
-    if (!trustedIntent(run)) {
-      clearIntent(run);
-      return end(run, 'stopped', '页面已显示未关注，但未能完整确认本次操作。本地记录已保留；请从工作台重新打开以核实当前状态。');
-    }
+    if (!trustedIntent(run)) return reconcile(run);
+    resetReconciliation(run);
     if (!run.followSince) {
       run.followSince = Date.now();
       run.reason = '已观察到取消关注，正在确认并更新本地记录…'; render(run);

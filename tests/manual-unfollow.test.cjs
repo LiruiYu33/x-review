@@ -70,9 +70,56 @@ test('a stable not-followed account reconciles an owner-bound stale record atomi
   assert(transaction.reviewData);assert.equal(transaction.manualUnfollowUndo.record.key,h.original.key);
   assert.equal(h.windows.length,1);
 });
-test('reconciliation after a queued arm acknowledgement preserves the bound identity',async()=>{
-  const h=harness();await h.begin();await h.observe('following');
-  assert.equal((await h.observe('reconcile')).data.phase,'removed');assert(!hasTarget(h));
+test('armed fallback without a captured click requires two seconds, saves undo and only then closes the same popup',async()=>{
+  const h=harness({id:'123'});const run=await h.begin();
+  assert.equal((await h.observe('following')).data.phase,'armed');
+  let stableFor=1999,reads=0;
+  h.mutateProof(()=>{h.proof().stableFor=stableFor;reads++;});
+  assert.equal((await h.observe('reconcile')).ok,false);
+  assert(hasTarget(h));assert.equal(h.closes.length,0);assert.equal(h.stored.manualUnfollowUndo,undefined);
+  stableFor=2000;reads=0;
+  const done=await h.observe('reconcile');
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');assert(!hasTarget(h));
+  assert.equal(reads,2,'The current Follow state is checked again before saving');
+  assert.equal(h.proof().trustedAction,false);
+  assert.equal(h.proof().observationKind,'already-not-following');
+  assert.match(done.data.reason,/当前未关注/);assert.doesNotMatch(done.data.reason,/已确认手动取关/);
+  assert.equal(h.windows.length,1);assert.equal(h.closes.length,1);assert.equal(h.closes[0].tabId,11);
+  const saved=h.closes[0].stored;
+  assert.equal(saved.reviewData.records.some(record=>record.key===h.original.key),false);
+  assert.equal(saved.manualUnfollow.phase,'removed');assert.equal(saved.manualUnfollow.runId,run.runId);
+  assert.equal(saved.manualUnfollow.documentId,h.page.documentId);assert.equal(saved.manualUnfollow.id,'123');
+  assert.equal(saved.manualUnfollow.viewer,'owner');assert.equal(saved.manualUnfollow.windowId,22);
+  assert.deepEqual(saved.manualUnfollowUndo.record,h.original);
+  assert.equal(saved.manualUnfollowUndo.runId,run.runId);
+  const transaction=h.writes.find(write=>write.manualUnfollow?.phase==='removed');
+  assert(transaction.reviewData);assert(transaction.manualUnfollowUndo);
+  assert.equal((await h.send({type:'UNFOLLOW_UNDO'})).data.restored,1);assert(hasTarget(h));
+});
+test('armed fallback keeps an unowned local record or a session whose signed-in account changed',async()=>{
+  for(const scenario of ['unowned','changed viewer']){
+    const h=harness({followingOwners:scenario==='unowned'?[]:['owner']});await h.begin();
+    assert.equal((await h.observe('following')).data.phase,'armed');
+    h.mutateProof(()=>{h.proof().stableFor=2000;});
+    const done=await h.observe('reconcile',scenario==='changed viewer'?{viewer:'another'}:{});
+    if(scenario==='unowned'){
+      assert.equal(done.data.phase,'retained');assert.match(done.data.reason,/没有关注名单归属/);
+    }else assert.equal(done.ok,false);
+    assert(hasTarget(h));assert.equal(h.closes.length,0);assert.equal(h.stored.manualUnfollowUndo,undefined);
+    assert.equal(h.writes.some(write=>write.manualUnfollow?.phase==='removed'),false);
+  }
+});
+test('armed fallback cannot save when the final probe becomes unknown or following again',async()=>{
+  for(const state of ['unknown','following']){
+    const h=harness();await h.begin();await h.observe('following');let reads=0;
+    h.mutateProof(()=>{
+      h.proof().stableFor=2000;
+      if(++reads===2)h.proof().state=state;
+    });
+    assert.equal((await h.observe('reconcile')).ok,false);
+    assert.equal(reads,2);assert(hasTarget(h));assert.equal(h.closes.length,0);
+    assert.equal(h.stored.manualUnfollowUndo,undefined);
+  }
 });
 test('reconciliation cannot remove records with missing, different or multiple owners',async()=>{
   for(const owners of [[],['another'],['owner','another']]){
@@ -99,6 +146,7 @@ test('armed reconciliation rejects conflicting document, viewer and target ident
     const h=harness();await h.begin();await h.observe('following');
     const sender={...h.page,...(change.documentId?{documentId:change.documentId}:{})};
     assert.equal((await h.observe('reconcile',change,sender)).ok,false);assert(hasTarget(h));
+    assert.equal(h.closes.length,0);assert.equal(h.stored.manualUnfollowUndo,undefined);
   }
 });
 test('reconciliation rejects incomplete, unstable or falsely attributed page proofs',async()=>{
