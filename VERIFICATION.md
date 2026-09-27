@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.2. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.3. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.3 subscription-enabled profile recognition
+
+A read-only inspection of the reported native X profile confirmed that a paid Subscribe button used a numeric `-unfollow` test ID, while the actual relationship control was an icon-only button identified by an account-bound Unfollow label with no test ID. Treating every numeric follow/unfollow suffix as relationship evidence could therefore select the subscription button or produce a false conflict. The reported window's full before-and-after event was not captured, and no real follow, unfollow or subscription control was activated during diagnosis.
+
+The watcher now recognises exact native action text and accessible labels within the existing profile-header boundary. Paid subscription controls never supply relationship state or trusted action evidence. A recognised subscription label explicitly addressed to the same account may corroborate its numeric ID when the native relationship icon lacks one. Mismatched handles, numeric IDs, action labels and relationship suffixes still retain the record. Missing, pending or disabled native controls cannot fall back to a subscription button. Stopped and failed panels explain that monitoring has ended and direct the user to reopen the account from the workspace, instead of asking them to keep waiting. Conflict messages identify which evidence disagreed.
+
+All 145 included Node.js tests and root JavaScript syntax checks passed, including 37 new watcher cases covering English, Simplified Chinese and Traditional Chinese action labels, subscription-only controls, mixed pending/Follow evidence, target and ID conflicts, cancellation and terminal guidance. Two local browser fixture scenarios passed: manual confirmation with an unchanged subscription button (including an unrelated subscription click that did not authorise removal), and initial not-following reconciliation beside that subscription button. Local browser fixtures use fictional accounts and the production watcher with a scoped fictional X URL and mocked extension acknowledgements; they do not exercise the installed extension service worker or prove a successful end-to-end action on the user's X account.
 
 ## Version 1.6.2 manual-unfollow recovery
 
