@@ -76,7 +76,7 @@
   async function drive(runId, token) {
     try {
       while (!closed && token === generation && localRunId === runId) {
-        const next = await send({type: 'ACT_NEXT', runId});
+        const next = await send({type: 'ACT_NEXT', runId, index: run.index});
         if (closed || token !== generation || localRunId !== runId) return;
         render(next);
         if (!running() || run?.runId !== runId || !(await betweenAccounts(token))) return;

@@ -37,7 +37,10 @@ test('previously stored completion reasons and nested failures render in English
     '检查已停止：X 要求登录，已停止本轮自动检查。',
     '本轮本地自动清理失败：自动清理保存失败，原记录与此前已保存的名单已保留。；本次加载不保证名单完整。',
     '@review_owner · 已暂停 · 已保存 42 个账户',
-    '活跃度阈值已改变，快速检查结果不再符合近期发帖条件；本轮已停止，请重新开始。'
+    '活跃度阈值已改变，快速检查结果不再符合近期发帖条件；本轮已停止，请重新开始。',
+    '无法核实控制页身份，任务已停止：Context lookup unavailable',
+    '无法核实X 检查标签页，任务已停止：No tab with id: 2',
+    '检查进度请求已失效，请重新打开控制页后开始。'
   ];
   for (const source of samples) assert.doesNotMatch(I.t(source), /\p{Script=Han}/u, source);
   assert.match(I.t(samples[5]), /@review_owner.*Paused.*42/);

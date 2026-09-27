@@ -9,8 +9,9 @@ const DAY=86400000;
 function harness({records=[{handle:'target'}],thresholdDays=180}={}){
   const epoch=Date.parse('2026-09-27T12:00:00Z');
   let now=epoch,timerId=0,queue=Promise.resolve(),permitted=true,validContext=true;
-  let probeHook,executionFailures=0,injectionFailures=0,navigationStatus='complete',resolveURL=url=>url,documentId='doc-1';
-  const timers=new Map(),writes=[],navigations=[],injections=[],probes=[];
+  let probeHook,executionFailures=0,injectionFailures=0,navigationStatus='complete',resolveURL=url=>url,documentId='doc-1',creationFailure='',creationHook;
+  const tabReadFailures=new Map(),tabReads=[];
+  const timers=new Map(),writes=[],creates=[],navigations=[],injections=[],probes=[];
   const clone=value=>structuredClone(value);
   class Clock extends Date{
     constructor(...args){super(...(args.length?args:[now]));}
@@ -36,8 +37,19 @@ function harness({records=[{handle:'target'}],thresholdDays=180}={}){
       getContexts:async()=>validContext?[{tabId:1,documentUrl:sender.url}]:[]},
     permissions:{contains:async()=>permitted},
     storage:{local:{get:async key=>({[key]:clone(stored[key])}),set:async values=>{writes.push({at:now-epoch,values:clone(values)});Object.assign(stored,clone(values));}}},
-    tabs:{get:async id=>{if(!tabs.has(id))throw Error('Tab closed');return clone(tabs.get(id));},
-      create:async options=>{const tab={id:2,url:options.url,status:'complete'};tabs.set(2,tab);return clone(tab);},
+    tabs:{get:async id=>{
+      tabReads.push({id,at:now-epoch});
+      const failure=tabReadFailures.get(id);
+      if(failure?.count>0){failure.count--;throw Error(failure.message);}
+      if(!tabs.has(id))throw Error('No tab with id: '+id+'.');return clone(tabs.get(id));
+    },
+      create:async options=>{
+        creates.push({at:now-epoch,...options});
+        if(creationFailure)throw Error(creationFailure);
+        const tab={id:2,url:resolveURL(options.url),status:navigationStatus};tabs.set(2,tab);
+        delete page.XReviewProfileProbe;delete page.XReviewReadPage;
+        if(creationHook)await creationHook(tab);return clone(tab);
+      },
       update:async(id,options)=>{
         navigations.push({id,at:now-epoch,...options});
         const tab={id,url:resolveURL(options.url),status:navigationStatus};tabs.set(id,tab);
@@ -68,20 +80,28 @@ function harness({records=[{handle:'target'}],thresholdDays=180}={}){
     getFollowingScan:async()=>null,reconcileFollowingScan:async()=>{},manualUnfollowBusy:async()=>false});
   const flush=async()=>{for(let count=0;count<200;count++)await Promise.resolve();};
   const send=message=>service.handle(message,sender);
-  return {stored,writes,navigations,injections,probes,tabs,ready,send,service,flush,
+  return {stored,writes,creates,navigations,injections,probes,tabs,ready,send,service,flush,tabReads,
     now:()=>now-epoch,core,
     setProbe:fn=>probeHook=fn,permission:value=>permitted=value,controller:value=>validContext=value,
     failExecution:count=>executionFailures=count,failInjection:count=>injectionFailures=count,
+    failCreate:message=>creationFailure=message,onCreate:fn=>creationHook=fn,
+    failTabReads:(id,count,message='Temporary tab lookup failure')=>tabReadFailures.set(id,{count,message}),
+    contextsAPI:value=>chrome.runtime.getContexts=value,
     setNavigationStatus:value=>navigationStatus=value,resolveURL:fn=>resolveURL=fn,
     replaceDocument:(id,{dropGlobals=false}={})=>{
       documentId=id;
       if(dropGlobals){delete page.XReviewProfileProbe;delete page.XReviewReadPage;}
     },
+    holdQueue:(onRelease=()=>{})=>{
+      let release;const gate=new Promise(resolve=>{release=resolve;});
+      void enqueue(async()=>{await gate;onRelease();});return release;
+    },
     saves:()=>writes.filter(write=>write.values.reviewData),
-    async begin(){return send({type:'ACT_BEGIN',mode:'all',limit:records.length});},
-    next(){
+    visits:()=>[...creates.map(visit=>({id:2,...visit})),...navigations],
+    async begin(){return send({type:'ACT_BEGIN',mode:'all',limit:Math.max(1,records.length)});},
+    next(index=stored.activityRun.index){
       const task={done:false,value:null,error:null};
-      task.promise=send({type:'ACT_NEXT',runId:stored.activityRun.runId}).then(value=>{task.done=true;task.value=value;return value;},error=>{task.done=true;task.error=error;throw error;});
+      task.promise=send({type:'ACT_NEXT',runId:stored.activityRun.runId,index}).then(value=>{task.done=true;task.value=value;return value;},error=>{task.done=true;task.error=error;throw error;});
       return task;
     },
     async advance(milliseconds){
@@ -199,14 +219,14 @@ test('cancelling during a page wait wakes the operation and prevents late eviden
   const {h,task}=await started();await h.advance(1000);
   await h.send({type:'ACT_STOP',runId:h.stored.activityRun.runId});await h.flush();
   assert.equal(task.done,true);assert.equal(task.value.phase,'stopped');
-  await h.advance(30000);assert.equal(h.saves().length,0);assert.equal(h.navigations.length,1);
+  await h.advance(30000);assert.equal(h.saves().length,0);assert.equal(h.visits().length,1);
 });
 
 test('concurrent ACT_NEXT requests share one profile visit and one evidence commit',async()=>{
   const h=harness();await h.begin();const first=h.next(),second=h.next();await h.advance(2000);
   assert.equal(first.done,true);assert.equal(second.done,true);
   assert.equal(first.value.completed,1);assert.equal(second.value.completed,1);
-  assert.equal(h.navigations.length,1);assert.equal(h.saves().length,1);assert.equal(h.injections.length,1);
+  assert.equal(h.visits().length,1);assert.equal(h.saves().length,1);assert.equal(h.injections.length,1);
 });
 
 test('a captured handle conflicting with the target stops before any evidence is saved',async()=>{
@@ -238,8 +258,8 @@ test('the next profile installs a fresh reader while reusing the same dedicated 
   const first=h.next();await h.advance(2000);assert.equal(first.value.phase,'running');
   const second=h.next();await h.advance(2000);assert.equal(second.value.phase,'complete');
   assert.equal(second.value.completed,2);assert.equal(h.injections.length,2);assert.equal(h.saves().length,2);
-  assert.deepEqual(h.navigations.map(visit=>visit.id),[2,2]);
-  assert.deepEqual(h.navigations.map(visit=>visit.url),['https://x.com/target','https://x.com/another']);
+  assert.deepEqual(h.visits().map(visit=>visit.id),[2,2]);
+  assert.deepEqual(h.visits().map(visit=>visit.url),['https://x.com/target','https://x.com/another']);
 });
 
 
@@ -289,4 +309,137 @@ test('multiple probes within one unchanged profile reuse the installed reader',a
   assert.equal(h.injections.length,1);
   await h.send({type:'ACT_STOP',runId:h.stored.activityRun.runId});await h.flush();
   assert.equal(task.done,true);assert.equal(h.saves().length,0);
+});
+
+
+for(const [record,url] of [[{handle:'target'},'https://x.com/target'],[{id:'123'},'https://x.com/i/user/123']]){
+  test('BEGIN opens the first profile directly at '+url+' and starts it without ACT_NEXT',async()=>{
+    const h=harness({records:[record]});
+    if(record.id){h.resolveURL(()=> 'https://x.com/target');h.setProbe(()=>h.ready({id:'123'}));}
+    const begun=await h.begin();await h.flush();
+    assert.equal(begun.phase,'running');
+    assert.equal(h.creates.length,1);assert.equal(h.creates[0].url,url);assert.equal(h.creates[0].active,true);
+    assert.equal(h.navigations.length,0);assert.ok(h.probes.length>0);
+    await h.advance(2000);
+    assert.equal(h.stored.activityRun.phase,'complete');assert.equal(h.stored.activityRun.completed,1);
+    assert.equal(h.saves().length,1);assert.equal(h.navigations.length,0);
+  });
+}
+
+test('BEGIN alone completes at most the first profile even if the controller remains inactive',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'}]});await h.begin();await h.advance(30000);
+  assert.equal(h.stored.activityRun.phase,'running');assert.equal(h.stored.activityRun.index,1);
+  assert.equal(h.stored.activityRun.completed,1);assert.equal(h.saves().length,1);
+  assert.equal(h.creates.length,1);assert.equal(h.navigations.length,0);
+  assert.equal(h.stored.reviewData.records.find(record=>record.handle==='another').evidence,undefined);
+});
+
+test('a delayed first ACT_NEXT joins the bootstrap visit without reloading the profile',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'}]});await h.begin();await h.advance(1000);
+  const first=h.next(0);await h.advance(1000);
+  assert.equal(first.done,true);assert.equal(first.value.completed,1);assert.equal(first.value.index,1);
+  assert.equal(h.creates.length,1);assert.equal(h.navigations.length,0);assert.equal(h.saves().length,1);
+});
+
+test('a late first ACT_NEXT catches up after bootstrap and cannot skip into the second profile',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'}]});await h.begin();await h.advance(2500);
+  const stale=h.next(0);await h.flush();
+  assert.equal(stale.done,true);assert.equal(stale.value.index,1);assert.equal(h.saves().length,1);
+  assert.equal(h.navigations.length,0);
+  const second=h.next(1);await h.advance(2000);
+  assert.equal(second.done,true);assert.equal(second.value.phase,'complete');assert.equal(second.value.completed,2);
+  assert.equal(h.creates.length,1);assert.equal(h.navigations.length,1);
+  assert.equal(h.navigations[0].url,'https://x.com/another');assert.equal(h.navigations[0].id,2);
+});
+
+test('duplicate stale ACT_NEXT requests cannot create another navigation after completion',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'}]});await h.begin();await h.advance(2000);
+  const first=h.next(0),duplicate=h.next(0);await h.flush();
+  assert.equal(first.done,true);assert.equal(duplicate.done,true);
+  assert.equal(first.value.index,1);assert.equal(duplicate.value.index,1);
+  assert.equal(h.navigations.length,0);assert.equal(h.saves().length,1);
+});
+
+test('invalid or future request indices cannot advance the activity queue',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'}]});await h.begin();
+  for(const index of [undefined,-1,0.5,1,'0']){
+    await assert.rejects(h.send({type:'ACT_NEXT',runId:h.stored.activityRun.runId,index}));
+  }
+  assert.equal(h.navigations.length,0);assert.equal(h.saves().length,0);
+  await h.send({type:'ACT_STOP',runId:h.stored.activityRun.runId});await h.flush();
+});
+
+test('an empty queue completes without creating or navigating any X tab',async()=>{
+  const h=harness({records:[]});const begun=await h.begin();await h.advance(30000);
+  assert.equal(begun.phase,'complete');assert.equal(begun.total,0);
+  assert.equal(h.creates.length,0);assert.equal(h.navigations.length,0);assert.equal(h.probes.length,0);
+});
+
+test('a rejected tab creation stops the round without starting a hidden check',async()=>{
+  const h=harness();h.failCreate('Could not create tab');
+  await assert.rejects(h.begin(),/Could not create tab/);await h.advance(30000);
+  assert.equal(h.stored.activityRun.phase,'stopped');assert.equal(h.creates.length,1);
+  assert.equal(h.navigations.length,0);assert.equal(h.probes.length,0);assert.equal(h.saves().length,0);
+});
+
+test('an initial transient tab read recovers without abandoning or reloading the first profile',async()=>{
+  const h=harness();h.failTabReads(2,1,'Temporary scan lookup failure');await h.begin();
+  await h.advance(3000);
+  assert.equal(h.stored.activityRun.phase,'complete');assert.equal(h.stored.activityRun.completed,1);
+  assert.equal(h.creates.length,1);assert.equal(h.navigations.length,0);assert.equal(h.saves().length,1);
+  assert.ok(h.tabReads.filter(read=>read.id===2).length>1);
+});
+
+test('an actually closed initial scan tab stops immediately without the retry delay',async()=>{
+  const h=harness();h.onCreate(()=>h.tabs.delete(2));await h.begin();await h.flush();
+  assert.equal(h.now(),0);assert.equal(h.stored.activityRun.phase,'stopped');
+  assert.equal(h.saves().length,0);assert.equal(h.navigations.length,0);
+  assert.equal(h.tabReads.filter(read=>read.id===2).length,1);
+});
+
+test('persistent initial scan read failures stop after bounded retries with a specific diagnostic',async()=>{
+  const h=harness();h.failTabReads(2,10,'Temporary scan lookup failure');await h.begin();
+  await h.advance(499);assert.equal(h.stored.activityRun.phase,'running');
+  await h.advance(1);assert.equal(h.stored.activityRun.phase,'stopped');
+  assert.match(h.stored.activityRun.reason,/Temporary scan lookup failure/);
+  assert.equal(h.tabReads.filter(read=>read.id===2).length,3);
+  assert.equal(h.saves().length,0);assert.equal(h.navigations.length,0);
+});
+
+test('a missing browser context API reports incompatibility instead of claiming the tab closed',async()=>{
+  const h=harness();h.contextsAPI(undefined);const begun=await h.begin();
+  assert.equal(begun.phase,'stopped');assert.match(begun.reason,/116|不支持/);
+  assert.equal(h.creates.length,0);assert.equal(h.saves().length,0);
+});
+
+test('a throwing browser context API is retried and reports its actual error',async()=>{
+  const h=harness();h.contextsAPI(async()=>{throw Error('Context API failed');});
+  const beginning=h.begin();await h.advance(500);const begun=await beginning;
+  assert.equal(begun.phase,'stopped');assert.match(begun.reason,/Context API failed/);
+  assert.equal(h.creates.length,0);assert.equal(h.saves().length,0);
+});
+
+test('an invalid controller context cannot bootstrap a new X tab',async()=>{
+  const h=harness();h.controller(false);const begun=await h.begin();
+  assert.equal(begun.phase,'stopped');assert.equal(h.creates.length,0);assert.equal(h.probes.length,0);
+});
+
+test('missing X permission rejects BEGIN before any tab can be created',async()=>{
+  const h=harness();h.permission(false);await assert.rejects(h.begin());
+  assert.equal(h.creates.length,0);assert.equal(h.navigations.length,0);assert.equal(h.saves().length,0);
+});
+
+
+test('an ACT_NEXT index is rechecked after waiting for the shared write queue',async()=>{
+  const h=harness({records:[{handle:'target'},{handle:'another'},{handle:'third'}]});
+  await h.begin();await h.advance(2000);
+  assert.equal(h.stored.activityRun.index,1);
+  // A preceding queued write finishes after request validation but before the
+  // new selection. It represents progress already committed by another owner.
+  const release=h.holdQueue(()=>{h.stored.activityRun.index=2;h.stored.activityRun.completed=2;});
+  const stale=h.next(1);await h.flush();assert.equal(stale.done,false);
+  release();await h.flush();
+  assert.equal(stale.done,true);assert.equal(stale.value.index,2);
+  assert.equal(h.navigations.length,0);assert.equal(h.saves().length,1);
+  assert.equal(h.stored.reviewData.records.find(record=>record.handle==='third').evidence,undefined);
 });

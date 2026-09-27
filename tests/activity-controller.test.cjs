@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../activity.js'), 'utf8');
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-async function harness() {
+async function harness({bootstrapBeforeAcknowledgement = false} = {}) {
   let now = 0, timerId = 0, current = null, languageChange;
   const timers = new Map(), elements = new Map(), pageEvents = new Map();
   const messages = [], pending = [];
@@ -32,9 +32,17 @@ async function harness() {
       messages.push({...message, at: now});
       if (message.type === 'ACT_BEGIN') current = {
         phase: 'running', runId: 'run-1', controllerTabId: 7,
-        total: 3, completed: 0, read: 0, unknown: 0, skipped: 0
+        total: 3, index: 0, completed: 0, read: 0, unknown: 0, skipped: 0
       };
-      if (message.type === 'ACT_NEXT') return new Promise(resolve => pending.push(resolve));
+      if (message.type === 'ACT_NEXT') {
+        if (bootstrapBeforeAcknowledgement && current.index === 0) {
+          // The background finished the first account before the controller's
+          // acknowledgement arrived. Return progress without checking another.
+          current = {...current, index: 1, completed: 1, read: 1};
+          return Promise.resolve({ok: true, data: current});
+        }
+        return new Promise(resolve => pending.push(resolve));
+      }
       if (message.type === 'ACT_STOP') current = {...current, phase: 'stopped'};
       return Promise.resolve({ok: true, data: current});
     }}
@@ -75,7 +83,9 @@ async function harness() {
     async language() { languageChange(); await flush(); },
     async finishNext(overrides = {}) {
       assert.equal(pending.length, 1, 'Exactly one account check is in flight');
-      current = {...current, completed: current.completed + 1, ...overrides};
+      assert(messages.filter(message => message.type === 'ACT_NEXT').every(message => Number.isInteger(message.index) && message.index >= 0),
+        'Every next-account request identifies its expected queue index');
+      current = {...current, index: current.index + 1, completed: current.completed + 1, ...overrides};
       pending.shift()({ok: true, data: current});
       await flush();
     }
@@ -89,13 +99,31 @@ test('activity checks stay serial and the next account starts after a one-second
   await h.tick(5000);
   assert.equal(h.calls('ACT_BEGIN').length, 1);
   assert.equal(h.calls('ACT_NEXT').length, 1, 'Polling cannot start overlapping checks');
+  assert.deepEqual(h.calls('ACT_NEXT').map(message => message.index), [0]);
   await h.finishNext();
   await h.tick(999);
   assert.equal(h.calls('ACT_NEXT').length, 1, 'Do not navigate before the gap expires');
   await h.tick(1);
   assert.deepEqual(h.calls('ACT_NEXT').map(message => message.at), [0, 6000]);
+  assert.deepEqual(h.calls('ACT_NEXT').map(message => message.index), [0, 1]);
   await h.tick(3000);
   assert.equal(h.calls('ACT_NEXT').length, 2, 'A slow second check remains the only in-flight check');
+});
+
+test('acknowledging an already completed bootstrap account preserves the one-second gap', async () => {
+  const h = await harness({bootstrapBeforeAcknowledgement: true});
+  await h.click('activity-start');
+  assert.deepEqual(h.calls('ACT_NEXT').map(message => message.index), [0]);
+  assert.equal(h.element('activity-completed').textContent, '1');
+  await h.tick(999);
+  assert.equal(h.calls('ACT_NEXT').length, 1, 'A stale acknowledgement must not immediately request the second account');
+  await h.tick(1);
+  assert.deepEqual(h.calls('ACT_NEXT').map(message => ({index: message.index, at: message.at})),
+    [{index: 0, at: 0}, {index: 1, at: 1000}]);
+  await h.finishNext({phase: 'complete', total: 2});
+  assert.equal(h.element('activity-completed').textContent, '2');
+  await h.tick(3000);
+  assert.equal(h.calls('ACT_NEXT').length, 2);
 });
 
 test('stopping during the gap cancels the scheduled next account', async () => {
@@ -149,6 +177,7 @@ test('changing language preserves the current check and its pending gap', async 
   assert.equal(h.calls('ACT_NEXT').length, 1);
   await h.tick(1);
   assert.deepEqual(h.calls('ACT_NEXT').map(message => message.at), [0, 1000]);
+  assert.deepEqual(h.calls('ACT_NEXT').map(message => message.index), [0, 1]);
   assert.equal(h.calls('ACT_BEGIN').length, 1);
   assert.equal(h.calls('ACT_STOP').length, 0);
 });

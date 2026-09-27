@@ -1,5 +1,6 @@
-/* Serial, user-started visits to public X profile pages. The controller requests
- * one account at a time. Network waits never hold the shared data-write queue.
+/* Serial, user-started visits to public X profile pages. The background starts
+ * the first visit; the controller requests subsequent accounts by queue index.
+ * Network waits never hold the shared data-write queue.
  * No private endpoints, cookies, account controls or background fetches are used.
  */
 (function (root) {
@@ -72,13 +73,14 @@
     }
 
     // Validate both tabs and permission after every asynchronous page wait.
-    async function guard(runId) {
+    async function guard(runId, attempt = 0) {
       const run = await current(runId);
       if (!run) return null;
       if (!await hasPermission()) {
         await stop(runId, 'X 页面读取权限已撤销，检查已停止。已保存的观察仍然保留。');
         return null;
       }
+      let stage = '控制页';
       try {
         await chrome.tabs.get(run.controllerTabId);
         // tabs.get() can omit even our own page's URL without the broad tabs
@@ -88,6 +90,7 @@
           await stop(runId, '此浏览器版本不支持控制页面验证；请使用 Chrome / Edge 116 或更新版本。');
           return null;
         }
+        stage = '控制页身份';
         const contexts = await chrome.runtime.getContexts({
           contextTypes: ['TAB'], tabIds: [run.controllerTabId]
         });
@@ -95,9 +98,17 @@
           await stop(runId, '检查控制页面已关闭或跳转，任务已停止。');
           return null;
         }
+        stage = 'X 检查标签页';
         if (Number.isInteger(run.scanTabId)) await chrome.tabs.get(run.scanTabId);
-      } catch {
-        await stop(runId, '检查页面已关闭，任务已停止。已保存的观察仍然保留。');
+      } catch (error) {
+        const detail = String(error.message || error).slice(0, 250);
+        // A transient browser API failure is not proof that the tab was closed.
+        // Retry only reads, with cancellation and permission checked each time.
+        if (!/No tab with id|Invalid tab ID/i.test(detail) && attempt < 2) {
+          await pause(runId, 250);
+          return guard(runId, attempt + 1);
+        }
+        await stop(runId, '无法核实' + stage + '，任务已停止：' + detail);
         return null;
       }
       return current(runId);
@@ -148,16 +159,31 @@
       if (!active(run)) return run;
       try {
         if (!await guard(run.runId)) return getRun();
+        const selected = await select(run.runId);
+        if (!selected) return getRun();
+        run = selected.run;
+        const initialURL = core.profileUrl(selected.record);
+        if (!initialURL || !profileRoute(initialURL)) throw Error('该账户的 X 主页链接无效。');
+        if (!await guard(run.runId)) return getRun();
         // Only this initial tab creation requests focus. Later visits reuse it.
-        const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
+        // Open the actual profile so no blank tab depends on a second UI message.
+        const tab = await chrome.tabs.create({ url: initialURL, active: true });
         if (!Number.isInteger(tab.id)) throw Error('无法创建检查标签页。');
         run = await enqueue(async () => {
           const latest = await current(run.runId);
           if (!latest) return getRun();
-          Object.assign(latest, { scanTabId: tab.id, reason: '准备就绪；将逐个打开公开主页并保存观察。', updatedAt: nowISO() });
+          Object.assign(latest, { scanTabId: tab.id, initialKey: selected.record.key, initialURL,
+            reason: '正在打开 ' + labelFor(selected.record) + ' 的公开主页…', updatedAt: nowISO() });
           await chrome.storage.local.set({ activityRun: latest });
           return latest;
         });
+        if (active(run) && run.scanTabId === tab.id) {
+          // The first check does not depend on the now-hidden controller. Its
+          // indexed ACT_NEXT joins this operation or receives saved progress.
+          void next({ runId: run.runId, index: run.index }, sender).catch(error => {
+            void stop(run.runId, '检查已停止：' + String(error.message || error).slice(0, 250)).catch(() => {});
+          });
+        }
         return run;
       } catch (error) {
         await stop(run.runId, '未能准备检查页面：' + error.message);
@@ -170,10 +196,13 @@
         reason: `本轮检查已完成：${run.read} 个账户获得可用观察，${run.unknown} 个仍为未知${run.skipped ? `，另跳过 ${run.skipped} 个已处理或已删除账户` : ''}。${run.inferredAssociations ? `其中 ${run.inferredAssociations} 个数字 ID 账户按同标签页跳转关联观察，该关联属于导航推断。` : ''}请回到工作台复核候选。` });
     }
 
-    async function select(runId) {
+    async function select(runId, expectedIndex = null) {
       return enqueue(async () => {
         const run = await current(runId);
         if (!run) return null;
+        // Recheck under the write queue: another request may have committed
+        // after next() read its initial run snapshot.
+        if (expectedIndex !== null && run.index !== expectedIndex) return null;
         const data = await load();
         while (run.index < run.queue.length) {
           const record = data.records.find(item => item.key === run.queue[run.index]);
@@ -207,7 +236,9 @@
       const targetURL = core.profileUrl(requested);
       if (!targetURL || !profileRoute(targetURL)) throw Error('该账户的 X 主页链接无效。');
       if (!await guard(run.runId)) return null;
-      await chrome.tabs.update(run.scanTabId, { url: targetURL });
+      if (run.initialKey !== requested.key || run.initialURL !== targetURL) {
+        await chrome.tabs.update(run.scanTabId, { url: targetURL });
+      }
       if (!await guard(run.runId)) return null;
       const navigatedAt = Date.now();
       let acceptedHandle = '', previousSignature = '', matchingSince = 0, lastReason = '';
@@ -377,13 +408,17 @@
       if (!run || run.runId !== message.runId || sender.tab?.id !== run.controllerTabId || !controllerURL(sender.url)) throw Error('账户检查会话已失效，请返回原控制页面。');
       if (!active(run)) return run;
       if (!Number.isInteger(run.scanTabId)) throw Error('检查标签页尚未准备完成。');
+      if (!Number.isInteger(message.index) || message.index < 0 || message.index > run.index) {
+        throw Error('检查进度请求已失效，请重新打开控制页后开始。');
+      }
+      if (message.index < run.index) return run;
       if (nextOperation?.runId === run.runId) return nextOperation.promise;
       const operation = { runId: run.runId, promise: null };
       nextOperation = operation;
       operation.promise = (async () => {
         try {
           if (!await guard(run.runId)) return getRun();
-          const selected = await select(run.runId);
+          const selected = await select(run.runId, message.index);
           if (!selected) return getRun();
           const observation = await observe(selected.run, selected.record, selected.thresholdDays);
           if (!observation) return getRun();

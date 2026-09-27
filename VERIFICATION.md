@@ -1,12 +1,22 @@
 # Verification record
 
-Target version: 1.6.7. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.8. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.8 profile-check startup
+
+The user reported an `about:blank` tab and the previous generic "checking page was closed" status. Source inspection ties that status to a catch covering controller-tab, extension-context and checking-tab reads; the exact underlying browser exception was not captured. It does not establish that the user closed a tab or that blank-page permissions caused the error. The old start command deliberately opened a blank page and depended on a subsequent control-page request to navigate it.
+
+Starting now selects the first eligible account, opens its actual X URL and starts one observation in the background service. That first navigation is reused, including numeric-ID redirects. Subsequent requests carry their expected queue index; stale requests only retrieve progress, and the index is checked again within the write queue before selection. The controller retains its one-second pause before requesting another account. No autonomous multi-account loop is introduced.
+
+Page-validation API failures receive up to two cancellable read retries, 250 ms apart. Explicit missing-tab errors stop immediately. A persistent failure reports the validation stage and original error instead of assuming that a page was closed. Permission, controller identity, target identity, cancellation and save guards remain enforced.
+
+All 234 included Node.js tests and root JavaScript syntax checks passed, including 18 new startup and indexed-controller cases. Coverage includes direct handle/ID navigation, startup without a control-page continuation, delayed and duplicate requests, queue selection races, creation failures, bounded read retries and accurate diagnostics. Three focused startup regressions fail against the unchanged 1.6.7 service: it creates a blank page for both handle and numeric-ID targets and does not begin observing without a second request. These tests use a virtual clock and mocked browser APIs; the user's original browser exception and a signed-in end-to-end rerun remain unverified.
 
 ## Version 1.6.7 faster post-date checks
 
