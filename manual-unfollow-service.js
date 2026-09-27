@@ -242,12 +242,34 @@
         return {restored: existing ? 0 : 1, session: publicRun(session)};
       });
     }
+    async function sameArmedDocument(run, tabId) {
+      if (!run.documentId || !run.handle || !run.id || !run.viewer) return 'changed';
+      try {
+        const tab = await chrome.tabs.get(tabId), tabRoute = route(tab.url);
+        // A previous completion can race with the next profile-tab change.
+        // The fresh proof path already refuses writes while navigation is pending.
+        if (tab.pendingUrl) {
+          const pendingRoute = route(tab.pendingUrl);
+          return pendingRoute?.handle && sameHandle(pendingRoute.handle, run.handle) ? 'pending' : 'changed';
+        }
+        if (tab.status === 'loading') return 'pending';
+        if (!tabRoute?.handle || !sameHandle(tabRoute.handle, run.handle)) return 'changed';
+        // tabs.onUpdated can report "loading" for an X profile-tab change.
+        // Check the current main document after completion rather than treating
+        // that status alone as proof of a full page reload.
+        const [probe] = await chrome.scripting.executeScript({target: {tabId},
+          func: () => ({url: location.href, session: globalThis.XReviewUnfollowWatcher?.state() || null})});
+        if (!probe?.documentId) return 'pending';
+        const pageRoute = route(probe?.result?.url), session = probe?.result?.session;
+        return probe.documentId === run.documentId && pageRoute?.handle && sameHandle(pageRoute.handle, run.handle)
+          && session?.runId === run.runId && sameHandle(session.handle, run.handle)
+          && session.id === run.id && sameHandle(session.viewer, run.viewer)
+          && ['watching', 'armed', 'verifying'].includes(session.phase) ? 'same' : 'changed';
+      } catch { return 'pending'; }
+    }
     async function tabUpdated(tabId, change, tab) {
       const run = await get();
       if (!active(run) || run.tabId !== tabId) return;
-      if (run.phase === 'armed' && change.status === 'loading') {
-        await cancel(run.runId, '取关页面已刷新或跳转，本地记录已保留。请重新打开取关窗口。'); return;
-      }
       if (change.url) {
         const next = route(change.url);
         if (!next || (next.id && (run.phase === 'armed' || next.id !== run.targetId))
@@ -256,7 +278,11 @@
           await cancel(run.runId, '已离开目标 X 主页，本地记录已保留。'); return;
         }
       }
-      if (change.status === 'complete' && run.phase !== 'armed') await attach(tabId);
+      if (change.status !== 'complete') return;
+      if (run.phase !== 'armed') { await attach(tabId); return; }
+      if (await sameArmedDocument(run, tabId) === 'changed') {
+        await cancel(run.runId, '取关页面已刷新或跳转，本地记录已保留。请重新打开取关窗口。');
+      }
     }
     async function handle(message) {
       switch (message.type) {

@@ -9,6 +9,7 @@ function harness(overrides = {}) {
   const original = core.normaliseRecord({handle:'target',followingOwners:['owner'],...overrides});
   const stored = {reviewData:{schemaVersion:1,thresholdDays:180,records:[original,core.normaliseRecord({handle:'other'})]}};
   let proof = null, permitted = true, exists = true, failRemoval = false, failClose = false, probeReads = 0, probeHook, closeCheckHook;
+  let liveDocumentId = 'doc-1';
   const writes = [], windows = [], closes = [], events = {};
   const tab = {id:11,windowId:22,url:'https://x.com/target',status:'loading'};
   const chrome = {
@@ -28,7 +29,18 @@ function harness(overrides = {}) {
       // Awaiting the listener exposes an accidental shared-write-queue deadlock.
       await events.removed(tabId);
     },query:async()=>[{...tab}],onRemoved:{addListener:fn=>events.removed=fn},onUpdated:{addListener:fn=>events.updated=fn}},
-    scripting:{executeScript:async options=>{if(options.files)return [];if(options.target.documentIds){probeReads++;if(probeHook)probeHook(probeReads);return[{documentId:options.target.documentIds[0],result:structuredClone(proof)}];}return[{result:null}];}}
+    scripting:{executeScript:async options=>{
+      if(options.files)return [];
+      if(options.target.documentIds){
+        probeReads++;if(probeHook)probeHook(probeReads);
+        if(options.target.documentIds[0]!==liveDocumentId)return [];
+        return[{frameId:0,documentId:liveDocumentId,result:structuredClone(proof)}];
+      }
+      const run=stored.manualUnfollow;
+      return[{frameId:0,documentId:liveDocumentId,result:{url:tab.url,session:run?.documentId===liveDocumentId
+        ? {runId:run.runId,handle:run.handle,id:run.id,viewer:run.viewer,phase:run.phase,reason:run.reason}
+        : null}}];
+    }}
   };
   const context=vm.createContext({chrome,URL,Date,console,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout});
   context.importScripts=(...files)=>files.forEach(file=>vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context));
@@ -48,11 +60,13 @@ function harness(overrides = {}) {
   return {stored,writes,windows,closes,tab,events,page,sender,original,send,begin,observe,
     permission:value=>permitted=value,exists:value=>exists=value,failRemoval:()=>failRemoval=true,
     failClose:()=>failClose=true,beforeCloseCheck:fn=>closeCheckHook=fn,
-    mutateProof:fn=>probeHook=fn,proof:()=>proof,setProof:value=>proof=value};
+    mutateProof:fn=>probeHook=fn,proof:()=>proof,setProof:value=>proof=value,
+    replaceDocument:id=>{liveDocumentId=id;page.documentId=id;}};
 }
 const hasTarget=h=>h.stored.reviewData.records.some(record=>record.key===h.original.key);
 async function updateProfileTab(h,pathname,change={}){
   h.tab.url='https://x.com'+pathname;h.page.url=h.tab.url;
+  if(change.status)h.tab.status=change.status;
   // The background onUpdated listener deliberately does not return its async
   // service task. Give that event a turn to settle before asserting its state.
   h.events.updated(11,{url:h.tab.url,...change},h.tab);
@@ -226,7 +240,11 @@ test('closing, cancelling, reloading, timing out or restarting never deletes',as
     const h=harness();await h.begin();await h.observe('following');
     if(action==='close')await h.events.removed(11);
     if(action==='cancel')await h.send({type:'UNFOLLOW_CANCEL'});
-    if(action==='reload'){h.events.updated(11,{status:'loading'},h.tab);await new Promise(resolve=>setTimeout(resolve,5));}
+    if(action==='reload'){
+      await updateProfileTab(h,'/target',{status:'loading'});
+      h.replaceDocument('doc-2');
+      await updateProfileTab(h,'/target',{status:'complete'});
+    }
     if(action==='timeout'){h.stored.manualUnfollow.expiresAt='2000-01-01T00:00:00Z';await h.send({type:'UNFOLLOW_STATUS'});}
     if(action==='restart')await h.events.startup();
     if(action==='watcher-stop')await h.send({type:'UNFOLLOW_WATCH_STOPPED',runId:h.stored.manualUnfollow.runId,reason:'Could not confirm'},h.page);
@@ -251,9 +269,85 @@ test('an already unfollowed account can be reconciled from its Videos tab',async
   assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');
   assert.equal(hasTarget(h),false);assert.equal(h.closes.length,1);
 });
-test('a full document reload still stops an armed watcher on the same profile tab',async()=>{
+test('same-document loading and complete events across X profile tabs keep the armed watcher and verified closure',async()=>{
+  const h=harness();const run=await h.begin();await h.observe('following');
+  for(const profilePath of ['/target/with_replies','/target/reposts','/target/media','/target']){
+    await updateProfileTab(h,profilePath,{status:'loading'});
+    assert.equal(h.stored.manualUnfollow.phase,'armed',profilePath);
+    assert(hasTarget(h));
+    assert.equal(h.closes.length,0);
+    if(profilePath==='/target/with_replies'){
+      assert.equal((await h.observe('confirmed')).ok,false,'A loading tab must not commit a stale Follow observation');
+      assert(hasTarget(h));
+    }
+    await updateProfileTab(h,profilePath,{status:'complete'});
+    assert.equal(h.stored.manualUnfollow.phase,'armed',profilePath);
+  }
+  const done=await h.observe('confirmed');
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');assert.equal(hasTarget(h),false);
+  assert.equal(h.closes.length,1);assert.equal(h.closes[0].tabId,run.tabId);
+  assert.equal(h.closes[0].stored.manualUnfollowUndo.record.key,h.original.key);
+});
+test('a same-document loading event without a URL change does not cancel an armed watcher',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  h.tab.status='loading';h.events.updated(11,{status:'loading'},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(h.stored.manualUnfollow.phase,'armed');assert(hasTarget(h));
+  h.tab.status='complete';h.events.updated(11,{status:'complete'},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  assert.equal((await h.observe('confirmed')).data.phase,'removed');assert.equal(h.closes.length,1);
+});
+test('separate loading, URL and complete events for a same-document profile tab stay armed',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  h.tab.status='loading';h.events.updated(11,{status:'loading'},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  await updateProfileTab(h,'/target/media');
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  h.tab.status='complete';h.events.updated(11,{status:'complete'},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  assert.equal((await h.observe('confirmed')).data.phase,'removed');
+  assert.equal(hasTarget(h),false);assert.equal(h.closes.length,1);
+});
+test('a queued same-account profile-tab change survives an earlier complete event',async()=>{
+  const h=harness();const run=await h.begin();await h.observe('following');
+  await updateProfileTab(h,'/target/media',{status:'loading'});
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  h.tab.pendingUrl='https://x.com/target/reposts';
+  await updateProfileTab(h,'/target/media',{status:'complete'});
+  assert.equal(h.stored.manualUnfollow.phase,'armed');assert(hasTarget(h));
+  assert.equal(h.closes.length,0);
+  delete h.tab.pendingUrl;
+  await updateProfileTab(h,'/target/reposts',{status:'complete'});
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  const done=await h.observe('confirmed');
+  assert.equal(done.ok,true);assert.equal(done.data.phase,'removed');assert.equal(hasTarget(h),false);
+  assert.equal(h.closes.length,1);assert.equal(h.closes[0].tabId,run.tabId);
+});
+test('a complete event with a pending other-account URL stops the armed watcher even without change.url',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  h.tab.pendingUrl='https://x.com/other/media';
+  h.events.updated(11,{status:'complete'},h.tab);
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));
+  assert.equal(h.closes.length,0);
+});
+test('a new document on the same approved profile tab stops the old armed watcher',async()=>{
   const h=harness();await h.begin();await h.observe('following');
   await updateProfileTab(h,'/target/reposts',{status:'loading'});
+  assert.equal(h.stored.manualUnfollow.phase,'armed');assert(hasTarget(h));
+  h.replaceDocument('doc-2');
+  await updateProfileTab(h,'/target/reposts',{status:'complete'});
+  assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));assert.equal(h.closes.length,0);
+  assert.equal((await h.observe('confirmed')).data.phase,'cancelled');assert(hasTarget(h));
+});
+test('navigation away during provisional loading immediately stops the armed watcher',async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  await updateProfileTab(h,'/target/media',{status:'loading'});
+  assert.equal(h.stored.manualUnfollow.phase,'armed');
+  await updateProfileTab(h,'/another/media',{status:'loading'});
   assert.equal(h.stored.manualUnfollow.phase,'cancelled');assert(hasTarget(h));assert.equal(h.closes.length,0);
 });
 for(const destination of ['/target/following','/target/status/123','/target/photo','/target/about','/target/media/123','/other/media','/i/user/123']){
