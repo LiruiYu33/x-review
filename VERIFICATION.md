@@ -1,12 +1,22 @@
 # Verification record
 
-Target version: 1.6.5. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.6. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.6 faster manual-unfollow recognition
+
+A recognised, trusted manual action now uses a 500 ms stable Follow interval instead of 2,000 ms. The background independently enforces the same interval before local removal. Initial not-following reconciliation still requires 2,000 ms and matching stored ownership. The panel reports verification as soon as the native Follow state is recognised, and restores an accurate still-following message if the page rolls back. Cancellation, identity conflicts, hidden or pending controls, unstable observations, two fresh background probes, atomic removal with undo and save-before-close remain enforced.
+
+Detection also rejects timeline and other excluded controls before computing their visibility or geometry, reuses the profile-name geometry within a single read, and reuses the viewer evidence within a single tick. This removes redundant work without changing which profile controls qualify. The 250 ms fallback poll and error-retry interval remain unchanged.
+
+The user reported a 5–10 second wait while the panel still showed its pre-verification prompt. Source inspection confirms a fixed two-second delay and unnecessary layout work but does not attribute every second of that reported wait. The reduced interval is measured from recognised eligible page evidence, not from the native click; it is not a promise of total completion time or an X server acknowledgement. A late UI rollback remains possible, and local undo remains available.
+
+All 179 included Node.js tests and root JavaScript syntax checks passed, including manual 499/500 ms boundaries, recovery 1,999/2,000 ms boundaries, rollback and fresh-probe failures, visible feedback, stability resets, and excluded controls that fail the test if their geometry is read. A local browser fixture observed the manual confirmation report 598 ms after the native Follow change; a separate initial-state fixture required 2,228 ms of stable evidence before reporting reconciliation. The fixtures run the production watcher with a scoped fictional X URL and mocked background acknowledgements, so these figures measure fixture recognition rather than installed-extension save-and-close time. Validation uses fictional accounts and mocked Chrome APIs; the user's signed-in end-to-end latency has not been measured.
 
 ## Version 1.6.5 automatic popup closure
 

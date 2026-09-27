@@ -208,19 +208,22 @@ function harness({ initial = 'following', owner = 'LocalOwner', ownerOffscreen =
   };
 }
 
-test('a trusted native confirmation needs two stable seconds before reporting removal', async () => {
+test('a trusted native confirmation needs 500 stable milliseconds before reporting removal', async () => {
   const h = harness();
   await h.start();
   assert.equal(h.state().phase, 'armed');
   await h.confirm(); await h.setFollowing(false);
-  await h.advance(1750);
+  assert.equal(h.state().phase, 'armed');
+  assert.match(h.state().reason, /已观察到取消关注/);
+  assert.match(h.panel().find(element => element.className === 'status').textContent, /已观察到取消关注/);
+  await h.advance(499);
   assert.deepEqual(h.observations().map(message => message.phase), ['following']);
-  await h.advance(250);
+  await h.advance(1);
   const observed = h.observations();
   assert.deepEqual(observed.map(message => message.phase), ['following', 'confirmed']);
   assert.equal(observed[1].proof.trustedAction, true);
   assert.equal(observed[1].proof.observationKind, 'manual-unfollow');
-  assert.ok(observed[1].proof.stableFor >= 2000);
+  assert.equal(observed[1].proof.stableFor, 500);
   assert.equal(h.state().phase, 'removed');
 });
 
@@ -230,7 +233,7 @@ test('a short missing profile header and button after native confirmation preser
   await h.advance(4750);
   assert.equal(h.observations().length, 1);
   h.main.children.unshift(h.name, h.button); h.name.parentElement = h.main; h.button.parentElement = h.main;
-  await h.setFollowing(false); await h.advance(2000);
+  await h.setFollowing(false); await h.advance(500);
   assert.equal(h.state().phase, 'removed');
   assert.equal(h.observations().at(-1).phase, 'confirmed');
   assert.equal(h.observations().at(-1).proof.trustedAction, true);
@@ -240,7 +243,7 @@ test('a rendered navigation profile outside the viewport still establishes the v
   const h = harness({ ownerOffscreen: true }); await h.start();
   assert.equal(h.state().phase, 'armed');
   assert.equal(h.state().viewer, 'localowner');
-  await h.confirm(); await h.setFollowing(false); await h.advance(2000);
+  await h.confirm(); await h.setFollowing(false); await h.advance(500);
   assert.equal(h.state().phase, 'removed');
 });
 
@@ -338,15 +341,15 @@ test('five full seconds without a profile button invalidate the trusted action e
   assert.equal(h.observations().length, 1);
 });
 
-test('a brief unknown state resets the complete two-second evidence window', async () => {
+test('a brief unknown state resets the complete 500-millisecond evidence window', async () => {
   const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false);
-  await h.advance(1750);
-  h.button.hidden = true; await h.change(); await h.advance(250);
-  h.button.hidden = false; await h.change(); await h.advance(1750);
-  assert.equal(h.observations().length, 1);
   await h.advance(250);
+  h.button.hidden = true; await h.change(); await h.advance(250);
+  h.button.hidden = false; await h.change(); await h.advance(499);
+  assert.equal(h.observations().length, 1);
+  await h.advance(1);
   assert.equal(h.state().phase, 'removed');
-  assert.equal(h.observations().at(-1).proof.stableFor, 2000);
+  assert.equal(h.observations().at(-1).proof.stableFor, 500);
 });
 
 test('initial reconciliation restarts its evidence window after the tab becomes hidden', async () => {
@@ -372,7 +375,7 @@ test('a native confirmation remains attributable while X aria-hides the backgrou
   await h.change(); await h.click(modal.confirm);
   modal.dialog.remove(); await h.change(); await h.advance(500);
   h.main.removeAttribute('aria-hidden'); h.profile.removeAttribute('aria-hidden');
-  await h.setFollowing(false); await h.advance(2000);
+  await h.setFollowing(false); await h.advance(500);
   assert.equal(h.state().phase, 'removed');
   assert.equal(h.observations().at(-1).proof.trustedAction, true);
 });
@@ -386,11 +389,18 @@ test('conflicting rendered viewer links cannot reconcile an initially unfollowed
 });
 
 test('re-following during the evidence window prevents the pending local deletion', async () => {
-  const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false); await h.advance(1750);
-  await h.setFollowing(true); await h.advance(5000);
+  const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false); await h.advance(250);
+  await h.setFollowing(true);
+  assert.match(h.state().reason, /恢复为正在关注/);
+  await h.advance(5000);
   assert.equal(h.observations().length, 1);
   assert.equal(h.state().phase, 'armed');
   assert.equal(h.proof().stableFor, 0);
+  await h.setFollowing(false); await h.advance(499);
+  assert.equal(h.observations().length, 1);
+  await h.advance(1);
+  assert.equal(h.state().phase, 'removed');
+  assert.equal(h.observations().at(-1).proof.stableFor, 500);
 });
 
 for (const [attribute, value] of [['disabled', ''], ['aria-disabled', 'true'], ['aria-busy', 'true']]) {
@@ -409,18 +419,18 @@ for (const [attribute, value] of [['disabled', ''], ['aria-disabled', 'true'], [
   });
 
   test('a briefly ' + attribute + ' control resets trusted confirmation evidence before succeeding', async () => {
-    const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false); await h.advance(1750);
+    const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false); await h.advance(250);
     h.button.setAttribute(attribute, value); await h.change(); await h.advance(250);
     assert.equal(h.proof().state, 'unknown');
     assert.equal(h.proof().trustedAction, false);
     assert.equal(h.proof().stableFor, 0);
-    h.button.removeAttribute(attribute); await h.change(); await h.advance(1750);
+    h.button.removeAttribute(attribute); await h.change(); await h.advance(499);
     assert.equal(h.observations().length, 1);
-    await h.advance(250);
+    await h.advance(1);
     assert.equal(h.state().phase, 'removed');
     assert.equal(h.observations().at(-1).phase, 'confirmed');
     assert.equal(h.observations().at(-1).proof.trustedAction, true);
-    assert.equal(h.observations().at(-1).proof.stableFor, 2000);
+    assert.equal(h.observations().at(-1).proof.stableFor, 500);
   });
 }
 
@@ -455,13 +465,13 @@ for (const locale of Object.keys(relationshipLabels)) {
     assert.equal(h.state().id, '123');
     assert.equal(h.proof().state, 'following');
     assert.equal(h.proof().id, '123');
-    await h.confirm(); await layout.setFollowing(false); await h.advance(1750);
+    await h.confirm(); await layout.setFollowing(false); await h.advance(499);
     assert.deepEqual(h.observations().map(message => message.phase), ['following']);
-    await h.advance(250);
+    await h.advance(1);
     assert.equal(h.state().phase, 'removed');
     assert.deepEqual(h.observations().map(message => message.phase), ['following', 'confirmed']);
     assert.equal(h.observations().at(-1).proof.trustedAction, true);
-    assert.equal(h.observations().at(-1).proof.stableFor, 2000);
+    assert.equal(h.observations().at(-1).proof.stableFor, 500);
     assert.equal(layout.subscription.getAttribute('data-testid'), '123-unfollow');
     assert.equal(layout.subscription.textContent, relationshipLabels[locale].subscriptionText);
   });
@@ -596,7 +606,7 @@ for (const [attribute, value] of [['disabled', ''], ['aria-disabled', 'true'], [
     assert.equal(h.proof().state, 'unknown');
     h.button.removeAttribute(attribute); await h.change();
     assert.equal(h.state().phase, 'armed');
-    await h.confirm(); await layout.setFollowing(false); await h.advance(2000);
+    await h.confirm(); await layout.setFollowing(false); await h.advance(500);
     assert.equal(h.state().phase, 'removed');
   });
 }
@@ -670,10 +680,45 @@ test('a native aria-label-only change is observed immediately despite filtering 
   h.button.setAttribute('aria-label', '关注 @FableBirch');
   await h.flush();
   assert.ok(h.deliveredMutations.slice(previous).some(record => record.target === h.button && record.attributeName === 'aria-label'));
-  await h.advance(1750);
-  assert.equal(h.proof().stableFor, 1750);
+  await h.advance(499);
+  assert.equal(h.proof().stableFor, 499);
   assert.deepEqual(h.observations().map(message => message.phase), ['following']);
-  await h.advance(250);
+  await h.advance(1);
   assert.equal(h.state().phase, 'removed');
   assert.equal(h.observations().at(-1).phase, 'confirmed');
 });
+
+
+test('a hidden tab resets the full 500-millisecond manual evidence window', async () => {
+  const h = harness(); await h.start(); await h.confirm(); await h.setFollowing(false);
+  await h.advance(250);
+  h.document.hidden = true; h.document.dispatch('visibilitychange'); await h.advance(1000);
+  assert.equal(h.observations().length, 1);
+  assert.equal(h.proof().trustedAction, false);
+  h.document.hidden = false; h.document.dispatch('visibilitychange'); await h.change();
+  await h.advance(499);
+  assert.equal(h.observations().length, 1);
+  await h.advance(1);
+  assert.equal(h.state().phase, 'removed');
+  assert.equal(h.observations().at(-1).proof.stableFor, 500);
+});
+
+for (const placement of ['timeline tweet', 'recommended user cell', 'navigation', 'after the profile tabs']) {
+  test('relationship detection skips geometry for controls in ' + placement, async () => {
+    const h = harness();
+    const irrelevant = node('button', { 'data-testid': '999-unfollow', 'aria-label': 'Unfollow @TidalFox' }, 'Following');
+    irrelevant.getBoundingClientRect = () => { throw new Error('Excluded controls must not force layout measurement'); };
+    if (placement === 'after the profile tabs') h.main.append(irrelevant);
+    else {
+      const container = placement === 'timeline tweet' ? node('article', { 'data-testid': 'tweet' })
+        : placement === 'recommended user cell' ? node('div', { 'data-testid': 'UserCell' }) : node('nav');
+      container.append(irrelevant); h.main.append(container);
+    }
+    await h.start();
+    assert.equal(h.state().phase, 'armed');
+    await h.confirm(); await h.setFollowing(false); await h.advance(500);
+    assert.equal(h.state().phase, 'removed');
+    assert.deepEqual(h.observations().map(message => message.phase), ['following', 'confirmed']);
+    assert.equal(h.observations().at(-1).proof.id, '123');
+  });
+}
