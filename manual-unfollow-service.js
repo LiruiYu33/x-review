@@ -23,7 +23,7 @@
       try {
         const url = new URL(raw);
         if (url.protocol !== 'https:' || url.hostname !== 'x.com' || url.port || url.username || url.password) return null;
-        const handle = url.pathname.match(/^\/([a-z0-9_]{1,15})\/?$/i);
+        const handle = url.pathname.match(/^\/([A-Za-z0-9_]{1,15})(?:\/(?:with_replies|reposts|media))?\/?$/);
         if (handle) return {handle: core.normaliseRecord({handle: handle[1]}).handle};
         const id = url.pathname.match(/^\/i\/user\/(\d{1,30})\/?$/);
         return id ? {id: id[1]} : null;
@@ -245,16 +245,18 @@
     async function tabUpdated(tabId, change, tab) {
       const run = await get();
       if (!active(run) || run.tabId !== tabId) return;
-      if (run.phase === 'armed' && (change.url || change.status === 'loading')) {
+      if (run.phase === 'armed' && change.status === 'loading') {
         await cancel(run.runId, '取关页面已刷新或跳转，本地记录已保留。请重新打开取关窗口。'); return;
       }
       if (change.url) {
         const next = route(change.url);
-        if (!next || (next.id && next.id !== run.targetId) || (next.handle && run.targetHandle && !sameHandle(next.handle, run.targetHandle))) {
+        if (!next || (next.id && (run.phase === 'armed' || next.id !== run.targetId))
+          || (next.handle && (run.targetHandle && !sameHandle(next.handle, run.targetHandle)
+            || run.handle && !sameHandle(next.handle, run.handle)))) {
           await cancel(run.runId, '已离开目标 X 主页，本地记录已保留。'); return;
         }
       }
-      if (change.status === 'complete') await attach(tabId);
+      if (change.status === 'complete' && run.phase !== 'armed') await attach(tabId);
     }
     async function handle(message) {
       switch (message.type) {

@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.10. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.11. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.11 same-account profile tabs
+
+A read-only inspection of a signed-in X profile confirmed that its Posts, Replies, Reposts and Videos tabs use the profile root, `/with_replies`, `/reposts` and `/media`, respectively, while retaining the native profile header and relationship control. Previously, both the page observer and background service accepted only the root path; the service also cancelled an armed session on any URL change. Switching tabs therefore ended monitoring despite staying on the same account.
+
+The watcher and service now accept only those four profile routes for the same bound account. A same-document tab switch keeps the session and any trusted native action, but restarts the Follow-state stability interval, including when the background requests proof before the next polling tick. The service continues to reject another account, a Following list, a post detail and other paths; a full reload of an armed page still cancels the session. Verified removal and the undo record are saved together before the original monitored tab closes. No real follow or unfollow control was activated during the read-only inspection.
+
+All 281 included Node.js tests and root JavaScript syntax checks passed. The new watcher regressions cover all four profile tabs, same-account transitions, temporary redraws, clock reset before the next polling tick, and rejection of unrelated or unsafe routes. Background regressions cover the corresponding tab-update decisions, numeric-ID binding, verified removal and automatic closure. These tests use fictional accounts and mocked browser services; no signed-in end-to-end unfollow was performed.
 
 ## Version 1.6.10 zero-day review filter
 
