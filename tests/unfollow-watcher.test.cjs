@@ -18,15 +18,40 @@ class Element {
   get hidden() { return this.getAttribute('hidden') !== null; }
   set hidden(value) { if (value) this.setAttribute('hidden', ''); else this.removeAttribute('hidden'); }
   get textContent() { return [this.text, ...this.children.map(child => child.textContent)].filter(Boolean).join(' '); }
-  set textContent(value) { this.text = String(value); this.children = []; }
+  set textContent(value) {
+    const removedNodes = this.children;
+    this.text = String(value); this.children = [];
+    for (const child of removedNodes) child.parentElement = null;
+    this.notifyMutation({ type: 'childList', target: this, addedNodes: [], removedNodes });
+  }
   get innerText() { return this.textContent; }
   getAttribute(name) { return this.attributes[name] ?? null; }
-  setAttribute(name, value) { this.attributes[name] = String(value); }
-  removeAttribute(name) { delete this.attributes[name]; }
-  append(...nodes) { for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); } }
+  setAttribute(name, value) {
+    const oldValue = this.getAttribute(name);
+    this.attributes[name] = String(value);
+    // Browsers enqueue an attribute record even when setAttribute repeats the
+    // existing value. Suppressing that write here would conceal render loops.
+    this.notifyMutation({ type: 'attributes', target: this, attributeName: name, oldValue });
+  }
+  removeAttribute(name) {
+    const oldValue = this.getAttribute(name);
+    delete this.attributes[name];
+    if (oldValue !== null) this.notifyMutation({ type: 'attributes', target: this, attributeName: name, oldValue });
+  }
+  notifyMutation(record) {
+    let root = this;
+    while (root.parentElement) root = root.parentElement;
+    root.fixtureMutation?.(record);
+  }
+  append(...nodes) {
+    for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); }
+    this.notifyMutation({ type: 'childList', target: this, addedNodes: nodes, removedNodes: [] });
+  }
   remove() {
-    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this);
+    const parent = this.parentElement;
+    if (parent) parent.children = parent.children.filter(node => node !== this);
     this.parentElement = null;
+    parent?.notifyMutation({ type: 'childList', target: parent, addedNodes: [], removedNodes: [this] });
   }
   descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
   matches(selector) {
@@ -69,13 +94,24 @@ class Element {
 }
 
 const node = (tag, attributes, text) => new Element(tag, attributes, text);
-function harness({ initial = 'following', owner = 'LocalOwner', ownerOffscreen = false, reply } = {}) {
+function harness({ initial = 'following', owner = 'LocalOwner', ownerOffscreen = false, reply, autoMutations = false } = {}) {
   let now = 100000;
   let sequence = 0;
   const intervals = new Map();
   const observers = new Set();
   const messages = [];
+  const deliveredMutations = [];
   const document = node('document');
+  document.fixtureMutation = record => {
+    if (!autoMutations) return;
+    for (const observer of observers) {
+      const { target, options } = observer;
+      if (record.target !== target && (!options.subtree || !target.contains(record.target))) continue;
+      if (record.type === 'attributes' && (!options.attributes || (options.attributeFilter && !options.attributeFilter.includes(record.attributeName)))) continue;
+      if (record.type === 'childList' && !options.childList) continue;
+      observer.records.push(record);
+    }
+  };
   const html = node('html');
   const body = node('body');
   const main = node('main', { 'data-testid': 'primaryColumn' });
@@ -108,17 +144,33 @@ function harness({ initial = 'following', owner = 'LocalOwner', ownerOffscreen =
     setInterval: (callback, delay) => { const id = ++sequence; intervals.set(id, { callback, delay, next: now + delay }); return id; },
     clearInterval: id => intervals.delete(id),
     MutationObserver: class {
-      constructor(callback) { this.callback = callback; }
-      observe() { observers.add(this); }
-      disconnect() { observers.delete(this); }
+      constructor(callback) { this.callback = callback; this.records = []; }
+      observe(target, options) { this.target = target; this.options = options; observers.add(this); }
+      disconnect() { observers.delete(this); this.records = []; }
     }
   });
   vm.runInContext(source, context);
   const watcher = context.XReviewUnfollowWatcher;
-  const flush = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
-  const change = async () => { for (const observer of [...observers]) observer.callback([]); await flush(); };
+  const flush = async () => {
+    let deliveries = 0;
+    for (let settled = 0; settled < 12; settled++) {
+      await Promise.resolve();
+      for (const observer of [...observers]) {
+        if (!observer.records.length) continue;
+        assert.ok(++deliveries <= 100, 'MutationObserver must yield before 100 consecutive deliveries; an extension render loop would starve profile loading');
+        const records = observer.records.splice(0);
+        deliveredMutations.push(...records);
+        observer.callback(records);
+        settled = -1;
+      }
+    }
+  };
+  const change = async () => {
+    for (const observer of [...observers]) observer.callback([{ type: 'childList', target: main, addedNodes: [], removedNodes: [] }]);
+    await flush();
+  };
   return {
-    watcher, messages, document, main, name, button, boundary, profile, location, change, flush,
+    watcher, messages, document, main, name, button, boundary, profile, location, change, flush, deliveredMutations,
     start: () => watcher.start({ runId: 'fixture-run', handle: 'FableBirch', id: '123' }),
     state: () => clone(watcher.state()),
     proof: () => clone(watcher.verify()),
@@ -571,3 +623,57 @@ for (const outcome of ['stopped', 'failed']) {
     assert.ok(status.textContent);
   });
 }
+
+
+test('observed panel writes yield while a delayed native profile is still loading', async () => {
+  const h = harness({ autoMutations: true });
+  h.name.remove(); h.button.remove();
+  await h.start(); await h.flush();
+  assert.equal(h.state().phase, 'watching');
+  assert.equal(h.observations().length, 0);
+  // Each interval renders the waiting state. Same-value host writes still
+  // produce real mutation records, so a self-observer loop fails the budget.
+  await h.advance(1000);
+  assert.equal(h.state().phase, 'watching');
+  h.main.append(h.name, h.button, h.boundary);
+  await h.flush();
+  assert.equal(h.state().phase, 'armed');
+  assert.deepEqual(h.observations().map(message => message.phase), ['following']);
+  assert.ok(h.deliveredMutations.some(record => record.type === 'childList' && record.target === h.main));
+});
+
+test('same-value observed attributes on the extension panel do not trigger a native-page reread', async () => {
+  const h = harness({ autoMutations: true });
+  h.name.remove(); h.button.remove();
+  await h.start(); await h.flush();
+  const host = h.document.getElementById('x-review-unfollow-panel');
+  const query = h.document.querySelector.bind(h.document);
+  let reads = 0;
+  h.document.querySelector = selector => { reads++; return query(selector); };
+  const previous = h.deliveredMutations.length;
+  host.setAttribute('aria-label', host.getAttribute('aria-label'));
+  await h.flush();
+  const delivered = h.deliveredMutations.slice(previous);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].target, host);
+  assert.equal(delivered[0].attributeName, 'aria-label');
+  assert.equal(reads, 0);
+  assert.equal(h.state().phase, 'watching');
+});
+
+test('a native aria-label-only change is observed immediately despite filtering extension panel mutations', async () => {
+  const h = harness({ autoMutations: true }); subscriptionLayout(h);
+  await h.start(); await h.flush(); await h.confirm();
+  assert.equal(h.button.getAttribute('data-testid'), null);
+  assert.equal(h.button.textContent, '');
+  const previous = h.deliveredMutations.length;
+  h.button.setAttribute('aria-label', '关注 @FableBirch');
+  await h.flush();
+  assert.ok(h.deliveredMutations.slice(previous).some(record => record.target === h.button && record.attributeName === 'aria-label'));
+  await h.advance(1750);
+  assert.equal(h.proof().stableFor, 1750);
+  assert.deepEqual(h.observations().map(message => message.phase), ['following']);
+  await h.advance(250);
+  assert.equal(h.state().phase, 'removed');
+  assert.equal(h.observations().at(-1).phase, 'confirmed');
+});
