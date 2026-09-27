@@ -1,10 +1,10 @@
 # Verification record
 
-Target version: 1.5.0. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.0. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
-The 1.5.0 update introduces a saved English/Simplified Chinese interface preference and prepares the source for public distribution. It retains the 1.4.0 collection, observation, automatic local-cleanup, and undo behaviour. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
+The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The validation described below uses local sample data and isolated browser fixtures. It does not access a user's browser profile or actual following list. Real, signed-in X pages and a physical Edge installation have not been validated. Fixture success does not prove that current X markup, loading behaviour, or every page language is supported.
 
@@ -18,13 +18,27 @@ The background checks the current run before saving the updated list, completion
 
 Before the 1.5.0 language work, isolated Chromium extension checks also covered collection deduplication, automatic cleanup without a manual apply request, read-only synchronisation history, undo, interrupted runs, hidden-tab pause, single-page navigation, rate-limit handling, stopped-task recovery, and continued collection after closing the popup. Additional fixtures checked completion feedback, workspace import/export and filtering, optional site permission handling, standalone operation, and narrow-screen layout. These browser fixtures were release-validation tools and are not all included in this repository.
 
-## Version 1.5.0 validation
+## Version 1.6.0 workspace validation
+
+Eight isolated Chromium workspace fixture scenarios passed. They checked that real extension records expose the Unfollow action alongside the existing profile link; optional site permission is requested synchronously from a trusted button click before a begin message; an active observation permits returning to its window and prevents another account from starting; language switching does not start or cancel an observation; stopping or denying permission retains records; storage changes remove a row and expose the separate local undo; the English banner fits a 390-pixel viewport; and demo/standalone views do not offer monitored unfollow controls. The English help text and dynamic interface messages were checked for untranslated text. Syntax checks passed for the updated workspace and its translation module.
+
+These workspace fixtures simulate extension messages and local storage. They verify the interface contract rather than current X markup.
+
+All 56 included Node.js tests passed on the final source, including 18 new manual-unfollow background tests. They cover exact document, target and viewer binding; fresh verification immediately before writing; protection against synthetic or unstable evidence, pending navigation, changed local records, other owners and conflicting IDs; mutual exclusion with collection/profile checks; atomic removal with undo; failed storage; stale completion messages; and clear/reset behaviour. JavaScript syntax checks passed for every root script.
+
+Fourteen isolated Chromium observer scenarios passed, including trusted native clicks, confirmation and cancellation, a modal that hides the background with aria-hidden, ambiguous handles and ID mismatches, protected identity binding, optimistic UI rollback, unrelated recommendation clicks, synthetic events, unavailable acknowledgements, language switching, and cancellation propagation. The observer never activates the native controls.
+
+Seven integration scenarios passed using the real extension service worker, storage, page injection, workspace and Chrome popup windows with synthetic X pages. Tests verified row removal after manual confirmation without a rescan, local-only undo, cancellation and closure, initially unfollowed profiles, numeric-ID redirects, concurrent local edits, and stopping monitoring. The fixture opens a blank window briefly before navigating so Playwright can attach offline interception before the first request; this is a test-only timing accommodation, not production behaviour. No real X account or network was used.
+
+The final source also passed nine following-list cleanup integration scenarios and 15 workspace regression scenarios covering imports, evidence, filtering, backups, undo, standalone mode and narrow layouts. The historical language checks below describe the previous release and are not claimed as a full current-version rerun.
+
+## Historical version 1.5.0 validation
 
 All 38 included Node.js tests passed: 27 record/synchronisation tests, eight shared translation/preference tests, and three runtime-diagnostic translation tests. Root JavaScript syntax checks also passed.
 
-Current-version isolated Chromium checks passed across six full-extension language scenarios, eight workspace language scenarios, and six popup/controller language scenarios. They verified switching both ways, reopening with the saved choice, live synchronisation across extension pages and the injected collector panel, independent standalone storage, English dates and dynamic diagnostics, unchanged imported account data and draft inputs, no task restart or cancellation during a language change, and a 390-pixel-wide English layout without document overflow. The collector test also confirmed that its language setting leaves the X host document language unchanged.
+Version 1.5.0 isolated Chromium checks passed across six full-extension language scenarios, eight workspace language scenarios, and six popup/controller language scenarios. They verified switching both ways, reopening with the saved choice, live synchronisation across extension pages and the injected collector panel, independent standalone storage, English dates and dynamic diagnostics, unchanged imported account data and draft inputs, no task restart or cancellation during a language change, and a 390-pixel-wide English layout without document overflow. The collector test also confirmed that its language setting leaves the X host document language unchanged.
 
-The current version additionally passed nine automatic-cleanup extension regression scenarios and 15 workspace regression scenarios, including import/export, evidence edits, filtering, backups, undo, incomplete-scan protection and optional host permissions. All browser checks used fixtures, not a live X account. The preview image contains fictional demo accounts.
+Version 1.5.0 additionally passed nine automatic-cleanup extension regression scenarios and 15 workspace regression scenarios, including import/export, evidence edits, filtering, backups, undo, incomplete-scan protection and optional host permissions. All browser checks used fixtures, not a live X account. The preview image contains fictional demo accounts.
 
 The repository CI workflow runs syntax checks on the root JavaScript files and runs all included Node.js tests with `node --test tests/*.test.cjs`. This documents the configured checks; a workflow file alone is not evidence of a successful GitHub Actions run.
 
@@ -32,4 +46,4 @@ The repository CI workflow runs syntax checks on the root JavaScript files and r
 
 Browser checks use synthetic X pages served through local request fixtures and a fresh Chromium profile. Where injection requires host access, only the isolated test copy grants that access; the published manifest keeps X host access optional. Accelerated fixture timers do not change the production collection interval of approximately 2.5 seconds. The tool does not call X's follow or unfollow controls.
 
-The extension permissions remain `activeTab`, `scripting`, and `storage`, with optional `https://x.com/*` access requested for a user-started profile check. No cookie access, network interception, private API, or external application server is introduced. Repository branch protection is a separate GitHub setting and must be verified on GitHub after application; its committed configuration does not activate it automatically.
+The extension permissions remain `activeTab`, `scripting`, and `storage`, with optional `https://x.com/*` access requested for a user-started profile check or manual-unfollow window. No cookie access, network interception, private API, or external application server is introduced. Repository branch protection is a separate GitHub setting and must be verified on GitHub after application; its committed configuration does not activate it automatically.

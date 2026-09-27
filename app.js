@@ -10,6 +10,8 @@ $('activity-open').addEventListener('click', () => {
 });
 const empty = () => ({schemaVersion: 1, records: [], thresholdDays: 180});
 let data = empty(), demo = false, view = 'candidate', query = '', evidenceKey = '', toastTimer;
+let manualUnfollow = null, manualCanUndo = false, manualBusy = false, manualError = '', manualStatusVersion = 0;
+const activeUnfollow = () => ['opening', 'watching', 'armed'].includes(manualUnfollow?.phase);
 const labels = {candidate: '待复核候选', all: '全部账户', unknown: '待补充数据', stale: '观察已过期', recent: '近期有发帖', keep: '保留名单', reviewed: '已处理'};
 const descriptions = {candidate: '这些账户需要你到主页再次确认，并不代表已经停用。', all: '所有导入和手动采集的记录，包括数据不足的账户。', unknown: '缺少可靠发帖记录，或上次观察已超过 7 天；不会列入候选。', keep: '你选择保留的账户，不再进入候选名单。', reviewed: '你已经在本地标记处理的账户，不代表 X 关注状态已经改变。'};
 function text(id, source) { const node = $(id); node.dataset.i18n = String(source ?? ''); node.textContent = t(source); }
@@ -79,6 +81,7 @@ function render() {
   $('import-open').disabled = demo; $('empty-import').disabled = demo;
   $('clear-data').hidden = demo; $('export-json').disabled = demo;
   $('following-sync-open').hidden = !isExtension || demo;
+  renderManualUnfollow();
 }
 function renderRow({record, result}) {
   const tr = el('tr');
@@ -97,6 +100,16 @@ function renderRow({record, result}) {
   if (demo) link.addEventListener('click', e => {e.preventDefault(); notify('这是虚构示例。返回「我的名单」后可打开真实账户。');});
   else if (isExtension) link.addEventListener('click', e => { e.preventDefault(); command({type:'OPEN',key:record.key}).catch(e => notify(e.message)); });
   wrap.append(link);
+  if (isExtension && !demo) {
+    const sameSession = activeUnfollow() && manualUnfollow.key === record.key;
+    const unfollow = el('button', 'button unfollow-button', t(sameSession ? '返回取关窗口' : '取消关注'));
+    unfollow.type = 'button'; unfollow.dataset.unfollowKey = record.key;
+    unfollow.disabled = manualBusy || (activeUnfollow() && !sameSession);
+    unfollow.title = t('在新窗口中使用 X 原生按钮自行取关，确认状态改变后自动移除本地记录。');
+    // Keep the permission request on the original user gesture, before any await or deferred callback.
+    unfollow.addEventListener('click', () => { void beginManualUnfollow(record.key); });
+    wrap.append(unfollow);
+  }
   const secondary = el('div','row-secondary');
   secondary.append(button('记录日期','text-button',() => openEvidence(record)));
   if (record.status === 'keep' || record.status === 'reviewed') secondary.append(button('恢复待审','text-button',async () => {await command({type:'STATUS',key:record.key,status:'pending'});render();}));
@@ -106,6 +119,77 @@ function renderRow({record, result}) {
   }
   wrap.append(secondary);actions.append(wrap);tr.append(identity,date,reason,actions);return tr;
 }
+function renderManualUnfollow() {
+  $('manual-unfollow').hidden = !isExtension || demo || (!manualUnfollow && !manualCanUndo && !manualError && !manualBusy);
+  const names = {opening:'正在打开 X 窗口', watching:'等待核实关注状态', armed:'请在 X 窗口自行取消关注', removed:'已移除本地记录', retained:'本地记录已保留', cancelled:'已停止观察', failed:'未能完成观察'};
+  const account = manualUnfollow?.handle ? '@' + manualUnfollow.handle : manualUnfollow?.key || '';
+  text('manual-unfollow-title', (names[manualUnfollow?.phase] || '手动取关') + (account ? ' · ' + account : ''));
+  text('manual-unfollow-reason', manualError || manualUnfollow?.reason || '在新窗口中使用 X 原生按钮自行取关，确认状态改变后自动移除本地记录。');
+  $('manual-unfollow-reason').classList.toggle('error', !!manualError || manualUnfollow?.phase === 'failed');
+  $('manual-unfollow-undo').hidden = !manualCanUndo;
+  $('manual-unfollow-undo').disabled = manualBusy || activeUnfollow();
+  $('manual-unfollow-refresh').disabled = manualBusy;
+  $('manual-unfollow-cancel').hidden = !activeUnfollow();
+  $('manual-unfollow-cancel').disabled = manualBusy;
+}
+async function manualRequest(message) {
+  if (!isExtension || demo) throw Error('手动取关同步仅在扩展版的真实名单中可用。');
+  const response = await chrome.runtime.sendMessage(message);
+  if (!response?.ok) throw Error(response?.error || '取关观察服务暂时不可用，请重新加载扩展。');
+  return response.data;
+}
+async function loadManualUnfollow() {
+  if (!isExtension || demo) return;
+  const version = ++manualStatusVersion;
+  try {
+    const status = await manualRequest({type:'UNFOLLOW_STATUS'});
+    if (version !== manualStatusVersion) return;
+    manualUnfollow = status?.session || null;
+    manualCanUndo = status?.canUndo === true;
+    manualError = '';
+    render();
+  } catch (error) {
+    if (version !== manualStatusVersion) return;
+    manualError = error.message;
+    renderManualUnfollow();
+  }
+}
+async function beginManualUnfollow(key) {
+  if (manualBusy || !isExtension || demo) return;
+  manualBusy = true; manualError = '';
+  try {
+    // Chrome requires this call to run directly in the trusted click handler.
+    const permission = chrome.permissions.request({origins:['https://x.com/*']});
+    render();
+    if (!await permission) throw Error('未授予 X 页面访问权限；账户记录已保留。');
+    manualUnfollow = await manualRequest({type:'UNFOLLOW_BEGIN', key});
+    render();
+    await loadManualUnfollow();
+  } catch (error) { manualError = error.message; }
+  finally { manualBusy = false; render(); }
+}
+$('manual-unfollow-cancel').addEventListener('click', async () => {
+  if (manualBusy || !activeUnfollow() || !isExtension || demo) return;
+  manualBusy = true; manualError = ''; renderManualUnfollow();
+  try {
+    manualUnfollow = await manualRequest({type:'UNFOLLOW_CANCEL'});
+    await loadManualUnfollow();
+  } catch(error) { manualError = error.message; }
+  finally { manualBusy = false; render(); }
+});
+$('manual-unfollow-refresh').addEventListener('click', () => { void loadManualUnfollow(); });
+$('manual-unfollow-undo').addEventListener('click', async () => {
+  if (manualBusy || !manualCanUndo || activeUnfollow() || !isExtension || demo) return;
+  manualBusy = true; manualError = ''; renderManualUnfollow();
+  try {
+    const result = await manualRequest({type:'UNFOLLOW_UNDO'});
+    manualUnfollow = result?.session || manualUnfollow;
+    notify(Number(result?.restored) > 0 ? '本地记录已恢复；不会重新关注 X 账户。' : '未覆盖现有记录；不会重新关注 X 账户。');
+    await command({type:'GET'});
+    await loadManualUnfollow();
+  } catch (error) { manualError = error.message; }
+  finally { manualBusy = false; render(); }
+});
 function download(name, text, mime) { const url = URL.createObjectURL(new Blob([text],{type:mime})); const a = el('a'); a.href=url; a.download=name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url),1000); }
 function showImport() { text('import-error', ''); $('import-dialog').showModal(); }
 function localDateTime(value) { const date = new Date(value); return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16); }
@@ -133,9 +217,13 @@ $('evidence-save').addEventListener('click',async () => {
 $('export-json').addEventListener('click',()=>download('x-review-backup.json',JSON.stringify(data,null,2),'application/json'));
 $('export-csv').addEventListener('click',()=>download(demo?'x-review-demo.csv':'x-review-candidates.csv',core.exportCSV(visibleRows().map(({record})=>record)),'text/csv;charset=utf-8'));
 $('help-open').addEventListener('click',()=>$('help-dialog').showModal());
-$('demo-toggle').addEventListener('click',async()=>{try{demo=!demo; if(demo)data=demoData();else await command({type:'GET'});view='candidate';query='';$('search').value='';render();}catch(e){notify(e.message);}});
+$('demo-toggle').addEventListener('click',async()=>{try{demo=!demo; if(demo)data=demoData();else { await command({type:'GET'}); void loadManualUnfollow(); }view='candidate';query='';$('search').value='';render();}catch(e){notify(e.message);}});
 $('clear-data').addEventListener('click',async()=>{if(!confirm(t('清空当前浏览器中保存的所有账户记录，并停止自动采集？此操作不会更改 X 上的关注关系。请先备份需要保留的数据。')))return;try{await command({type:'CLEAR'});render();notify('本地名单已清空');}catch(e){notify(e.message);}});
-if(isExtension) chrome.storage.onChanged.addListener(async changes=>{if(changes.reviewData&&!demo){await command({type:'GET'});render();}});
+if(isExtension) chrome.storage.onChanged.addListener(async (changes, area)=>{
+  if (area !== 'local' || demo) return;
+  if (changes.reviewData) { try { await command({type:'GET'}); render(); } catch(error) { notify(error.message); } }
+  if (changes.manualUnfollow || changes.manualUnfollowUndo) void loadManualUnfollow();
+});
 else window.addEventListener('storage',async event=>{if(event.key==='x-review-v1'&&!demo){try{await command({type:'GET'});render();}catch(e){notify(e.message);}}});
 let syncPreview = null, syncBusy = false, syncVersion = 0;
 async function syncRequest(message) {
@@ -218,5 +306,6 @@ i18n.onChange(() => {
   i18n.apply(document); render();
   $('threshold').value = draftThreshold;
   if ($('following-sync-dialog').open) renderSyncPreview(syncPreview);
+  renderManualUnfollow();
 });
-Promise.all([i18n.ready, command({type:'GET'})]).then(() => {i18n.apply(document);render();if(location.hash==='#following-sync')openFollowingSync();}).catch(e => {i18n.apply(document);render();notify('无法读取本地数据：'+e.message);});
+Promise.all([i18n.ready, command({type:'GET'})]).then(() => {i18n.apply(document);render();void loadManualUnfollow();if(location.hash==='#following-sync')openFollowingSync();}).catch(e => {i18n.apply(document);render();notify('无法读取本地数据：'+e.message);});

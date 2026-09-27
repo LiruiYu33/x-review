@@ -1,0 +1,239 @@
+/* Observe a user-performed native X unfollow. This script never activates X controls. */
+(() => {
+  'use strict';
+  if (globalThis.XReviewUnfollowWatcher) return;
+  const PANEL_ID = 'x-review-unfollow-panel';
+  const EXCLUDED = 'article,[data-testid="tweet"],[data-testid="UserCell"],aside,nav,[role="navigation"],[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
+  const DIALOGS = '[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
+  const STABLE_MS = 2000, INTENT_MS = 30000, MAX_MS = 10 * 60 * 1000;
+  const t = value => globalThis.XReviewI18n?.t(value) ?? value;
+  const handleOf = value => /^[A-Za-z0-9_]{1,15}$/.test(value || '') ? value.toLowerCase() : '';
+  const idOf = value => /^\d+$/.test(value || '') ? String(value) : '';
+  let current = null;
+
+  function visible(node) {
+    if (!node || node.closest('[hidden],[aria-hidden="true"]')) return false;
+    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0
+      && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+  }
+  const textOf = node => String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim();
+  function route() {
+    if (location.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(location.hostname) || location.port) return '';
+    return handleOf(location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]);
+  }
+  function viewer() {
+    const handles = [...document.querySelectorAll('[data-testid="AppTabBar_Profile_Link"]')].filter(visible).map(node => {
+      try {
+        const url = new URL(node.getAttribute('href'), location.origin);
+        return url.origin === location.origin ? handleOf(url.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]) : '';
+      } catch { return ''; }
+    }).filter(Boolean);
+    return new Set(handles).size === 1 ? handles[0] : '';
+  }
+  function blocked() {
+    if ([...document.querySelectorAll('[data-testid="LoginForm_Login_Button"],input[autocomplete="current-password"],iframe[src*="arkoselabs"],iframe[title*="challenge" i]')].some(visible)) return true;
+    const indicators = [...document.querySelectorAll('main [role="alert"],main [data-testid="error-detail"],main [data-testid="retry"],[data-testid="toast"]')]
+      .filter(node => !node.closest('article,[data-testid="tweet"],[data-testid="UserCell"]') && visible(node));
+    return indicators.some(node => /error|went wrong|unable|failed|try again|rate limit|too many requests|limit reached|sign in|log in|verify|出错|错误|錯誤|失败|失敗|重试|重試|稍后|稍後|登录|登入|验证|驗證|限制|频繁|頻繁/i.test(textOf(node)));
+  }
+  function read(run) {
+    const handle = route(), owner = viewer();
+    const unknown = {handle, id: '', viewer: owner, state: 'unknown', button: null};
+    if (!handle || !owner || blocked() || (run.targetHandle && handle !== run.targetHandle)
+      || (run.handle && handle !== run.handle) || (run.viewer && owner !== run.viewer)) return unknown;
+    const root = document.querySelector('main [data-testid="primaryColumn"],main[data-testid="primaryColumn"],main');
+    if (!root) return unknown;
+    const names = [...root.querySelectorAll('[data-testid="UserName"]')].filter(node => !node.closest(EXCLUDED) && visible(node));
+    // A single visible profile identity prevents recommendation or stale-page attribution.
+    if (names.length !== 1) return unknown;
+    const namedHandles = new Set([...textOf(names[0]).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
+    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return unknown;
+    const name = names[0], boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
+    const buttons = [...root.querySelectorAll('[data-testid$="-unfollow"],[data-testid$="-follow"]')].filter(node => {
+      if (!visible(node) || node.closest(EXCLUDED) || !node.matches('button,[role="button"]')) return false;
+      if (boundary && !(node.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+      const rect = node.getBoundingClientRect(), nameRect = name.getBoundingClientRect();
+      return Math.abs(rect.top - nameRect.top) < 600;
+    });
+    if (buttons.length !== 1) return unknown;
+    const match = buttons[0].getAttribute('data-testid').match(/^(\d+)-(unfollow|follow)$/);
+    if (!match || (run.targetId && match[1] !== run.targetId) || (run.id && match[1] !== run.id)) return unknown;
+    return {handle, id: match[1], viewer: owner, state: match[2] === 'unfollow' ? 'following' : 'follow', button: buttons[0]};
+  }
+  function dialogs() { return [...document.querySelectorAll(DIALOGS)].filter(visible); }
+  function expectedDialog(run, node) {
+    return Boolean(run.intent && node && new RegExp('@' + run.handle + '(?![A-Za-z0-9_])', 'i').test(textOf(node))
+      && [...node.querySelectorAll('[data-testid="confirmationSheetConfirm"]')].some(visible));
+  }
+  function active(run) { return current === run && !['removed', 'retained', 'stopped', 'failed'].includes(run.phase); }
+  function snapshot(run = current) {
+    return run ? {runId: run.runId, handle: run.handle || run.targetHandle, id: run.id || run.targetId, viewer: run.viewer || '', phase: run.phase, reason: run.reason}
+      : {phase: 'idle', reason: ''};
+  }
+  function clearIntent(run) { run.intent = null; run.followSince = 0; }
+  function verify() {
+    const run = current;
+    if (!run) return {state: 'unknown', trustedAction: false, stableFor: 0};
+    const state = read(run), eligible = active(run) && state.state === 'follow' && !document.hidden && !dialogs().length
+      && run.armed && run.intent && Date.now() - run.intent.at <= INTENT_MS && (!run.intent.dialogSeen || run.intent.confirmed);
+    return {runId: run.runId, handle: state.handle, id: state.id, viewer: state.viewer, state: state.state,
+      trustedAction: Boolean(eligible), stableFor: eligible && run.followSince ? Math.max(0, Date.now() - run.followSince) : 0};
+  }
+  function detach(run) {
+    clearInterval(run.timer); run.observer?.disconnect(); document.removeEventListener('click', run.onClick, true);
+    document.removeEventListener('visibilitychange', run.onVisibility); window.removeEventListener('pagehide', run.onPageHide);
+  }
+  function end(run, phase, reason, notify = true) {
+    run.phase = phase; run.reason = reason; detach(run); render(run);
+    if (notify && phase === 'stopped') {
+      void chrome.runtime.sendMessage({type: 'UNFOLLOW_WATCH_STOPPED', runId: run.runId, reason}).catch(() => {});
+    }
+    return snapshot(run);
+  }
+  function render(run) {
+    if (!run.panel) return;
+    const {host, title, status, detail, close} = run.panel;
+    host.setAttribute('lang', globalThis.XReviewI18n?.getLanguage() || 'zh-CN');
+    host.setAttribute('aria-label', t('X Review 手动取消关注'));
+    title.textContent = t('X Review · 手动取消关注');
+    status.textContent = t(run.reason);
+    detail.textContent = t('请在 X 原生页面亲自点击“正在关注”，再确认取消关注。检测成功后，本地记录会自动移除。关闭窗口或取消操作不会删除本地记录。');
+    detail.hidden = ['removed', 'retained'].includes(run.phase);
+    close.textContent = t(active(run) ? '停止检测' : '关闭提示');
+  }
+  function createPanel(run) {
+    document.getElementById(PANEL_ID)?.remove();
+    const host = document.createElement('aside'); host.id = PANEL_ID;
+    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:calc(100vw - 32px)';
+    const shadow = host.attachShadow({mode: 'closed'}), style = document.createElement('style');
+    style.textContent = '*{box-sizing:border-box}.panel{width:330px;max-width:calc(100vw - 32px);padding:16px;border:1px solid #666;border-radius:12px;background:#17191b;color:#f4f4f4;font:13px/1.5 system-ui,sans-serif;box-shadow:0 5px 22px #0005}.title{font-weight:650;margin:0 0 8px}.status{margin:0;overflow-wrap:anywhere}.detail{color:#bfc3c6;font-size:12px}button{padding:7px 12px;color:inherit;background:#30363b;border:1px solid #747c83;border-radius:6px;font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #8fcaff;outline-offset:2px}[hidden]{display:none!important}';
+    const panel = document.createElement('div'); panel.className = 'panel';
+    const title = document.createElement('p'); title.className = 'title';
+    const status = document.createElement('p'); status.className = 'status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const detail = document.createElement('p'); detail.className = 'detail';
+    const close = document.createElement('button'); close.type = 'button';
+    close.addEventListener('click', () => { if (active(run)) end(run, 'stopped', '已停止检测，本地记录未删除。'); else host.remove(); });
+    panel.append(title, status, detail, close); shadow.append(style, panel); (document.body || document.documentElement).append(host);
+    run.panel = {host, title, status, detail, close}; render(run);
+  }
+  async function report(run, phase) {
+    const reply = await chrome.runtime.sendMessage({type: 'UNFOLLOW_OBSERVED', runId: run.runId, handle: run.handle, id: run.id, viewer: run.viewer, phase});
+    if (!reply || reply.ok !== true) throw new Error(reply?.error || '扩展尚未确认保存，本地删除结果未知。');
+    const data = reply.data;
+    if (!data || data.runId !== run.runId || data.handle !== run.handle || data.id !== run.id || data.viewer !== run.viewer) throw new Error('检测会话不匹配，本地记录未确认删除。');
+    return data;
+  }
+  function clicked(run, event) {
+    if (!active(run) || !run.armed || !event.isTrusted || document.hidden || run.busy) return;
+    const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+    const button = target?.closest('button,[role="button"]');
+    const dialog = button?.closest(DIALOGS);
+    if (dialog) {
+      const owner = viewer();
+      if (!run.intent || Date.now() - run.intent.at > INTENT_MS || route() !== run.handle || (owner && owner !== run.viewer) || blocked()) { clearIntent(run); return; }
+      // Native modals may aria-hide the background header and navigation. The
+      // preceding trusted header click already bound the target and viewer.
+      if (button.matches('[data-testid="confirmationSheetConfirm"]') && visible(button) && expectedDialog(run, dialog)) {
+        run.intent.dialogSeen = true; run.intent.confirmed = true; run.intent.at = Date.now();
+      } else if (button.matches('[data-testid="confirmationSheetCancel"]')) {
+        clearIntent(run); run.reason = '操作已取消，本地记录保留。你可以再次手动取消关注。'; render(run);
+      }
+      return;
+    }
+    const state = read(run);
+    if (state.state === 'unknown') { clearIntent(run); return; }
+    if (button === state.button && state.state === 'following' && !dialogs().length) {
+      run.intent = {at: Date.now(), dialogSeen: false, confirmed: false}; run.followSince = 0;
+      run.reason = '等待你完成 X 的取消关注操作…'; render(run); return;
+    }
+  }
+  async function tick(run) {
+    if (!active(run) || run.busy) return;
+    if (Date.now() - run.startedAt > MAX_MS) return end(run, 'stopped', '检测已超时，本地记录未删除。请从工作台重新打开。');
+    if (run.handle && route() !== run.handle) return end(run, 'stopped', '已离开目标账户主页，本地记录未删除。');
+    const owner = viewer();
+    if (run.viewer && owner && owner !== run.viewer) return end(run, 'stopped', '当前登录账户已改变，本地记录未删除。');
+    if (blocked()) return end(run, 'stopped', 'X 显示登录、验证或错误提示，本地记录未删除。');
+    if (document.hidden) { run.followSince = 0; return; }
+    if (run.intent && Date.now() - run.intent.at > INTENT_MS) clearIntent(run);
+    const openDialogs = dialogs();
+    if (openDialogs.length) {
+      run.followSince = 0;
+      if (run.intent && openDialogs.every(dialog => expectedDialog(run, dialog))) run.intent.dialogSeen = true;
+      else clearIntent(run);
+      return;
+    }
+    const state = read(run);
+    if (state.state === 'unknown') {
+      clearIntent(run);
+      if (!run.armed && Date.now() - run.startedAt > 25000) return end(run, 'stopped', '未能识别账户主页或关注状态，本地记录已保留。请从工作台重新打开。');
+      run.reason = '等待可识别的账户主页、登录账户和关注按钮；尚未删除本地记录。'; render(run); return;
+    }
+    if (!run.armed) {
+      if (state.state !== 'following') {
+        return end(run, 'stopped', '页面未显示“正在关注”，无法证明本次发生了取消关注；本地记录保留。');
+      }
+      if (dialogs().length || Date.now() < run.retryAt) return;
+      run.handle = state.handle; run.id = state.id; run.viewer = state.viewer; run.busy = true;
+      try {
+        const data = await report(run, 'following');
+        if (!active(run)) return;
+        if (data.phase !== 'armed') return end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '检测未能开始，本地记录未删除。');
+        const fresh = read(run);
+        if (fresh.state !== 'following' || dialogs().length) return end(run, 'stopped', '关注状态在检测准备期间发生变化，请从工作台重新打开。');
+        run.armed = true; run.phase = 'armed'; run.reason = '检测已就绪，请在 X 页面手动取消关注。'; render(run);
+      } catch (error) {
+        if (active(run)) { run.reason = '检测未能开始：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
+      } finally { run.busy = false; }
+      return;
+    }
+    if (state.state === 'following') {
+      run.followSince = 0;
+      if (run.intent?.dialogSeen && !run.intent.confirmed) {
+        clearIntent(run); run.reason = '操作已取消，本地记录保留。你可以再次手动取消关注。'; render(run);
+      }
+      return;
+    }
+    if (!run.intent || (run.intent.dialogSeen && !run.intent.confirmed)) { run.followSince = 0; return; }
+    if (!run.followSince) run.followSince = Date.now();
+    if (Date.now() - run.followSince < STABLE_MS || Date.now() < run.retryAt) return;
+    run.busy = true; run.phase = 'verifying'; run.reason = '已观察到取消关注，正在确认并更新本地记录…'; render(run);
+    try {
+      const data = await report(run, 'confirmed');
+      if (!active(run)) return;
+      if (data.phase === 'removed') end(run, 'removed', data.reason || '已确认取消关注，本地记录已移除。现在可以关闭窗口。');
+      else if (['retained', 'cancelled', 'failed'].includes(data.phase)) end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '本地记录未删除，请回到工作台检查。');
+      else throw new Error('扩展尚未确认保存，本地删除结果未知。');
+    } catch (error) {
+      if (active(run)) { run.phase = 'armed'; run.reason = '尚未确认本地更新：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
+    } finally { run.busy = false; }
+  }
+  async function start(options = {}) {
+    if (current && active(current)) return snapshot(current);
+    const targetHandle = handleOf(options.handle), targetId = idOf(options.id);
+    if (!options.runId || (!targetHandle && !targetId)) throw new Error('缺少有效的取消关注检测目标。');
+    await globalThis.XReviewI18n?.ready;
+    const run = {runId: String(options.runId), targetHandle, targetId, handle: '', id: '', viewer: '', phase: 'watching',
+      reason: '正在准备取消关注检测…', startedAt: Date.now(), armed: false, intent: null, followSince: 0, retryAt: 0, busy: false};
+    current = run; createPanel(run);
+    run.onClick = event => clicked(run, event);
+    run.onVisibility = () => { run.followSince = 0; };
+    run.onPageHide = () => { if (active(run)) end(run, 'stopped', '页面已关闭或刷新，本地记录未删除。'); };
+    document.addEventListener('click', run.onClick, true); document.addEventListener('visibilitychange', run.onVisibility); window.addEventListener('pagehide', run.onPageHide);
+    // Mutation records may contain an entire React subtree. Re-read bounded header selectors only.
+    run.observer = new MutationObserver(() => { void tick(run); });
+    run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'hidden', 'aria-hidden']});
+    run.timer = setInterval(() => { void tick(run); }, 250);
+    await tick(run); return snapshot(run);
+  }
+  globalThis.XReviewI18n?.onChange(() => { if (current) render(current); });
+  globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+    const run = current, remote = changes.manualUnfollow?.newValue;
+    if (area !== 'local' || !run || !active(run) || remote?.runId !== run.runId) return;
+    if (['removed', 'retained', 'cancelled', 'failed'].includes(remote.phase)) {
+      end(run, remote.phase === 'cancelled' ? 'stopped' : remote.phase, remote.reason || '本地记录未删除，请回到工作台检查。', false);
+    }
+  });
+  globalThis.XReviewUnfollowWatcher = {start, state: () => snapshot(), verify, stop: () => current ? end(current, 'stopped', '已停止检测，本地记录未删除。') : snapshot()};
+})();

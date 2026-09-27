@@ -121,6 +121,7 @@
       const following = await getFollowingScan();
       if (following && ['running', 'paused'].includes(following.phase)) await reconcileFollowingScan(following);
       let run = await enqueue(async () => {
+        if (await options.manualUnfollowBusy?.()) throw Error('请先完成或停止取关窗口观察，再检查发帖时间。');
         const previous = await getRun();
         if (active(previous)) throw Error('已有账户检查任务正在运行，请先停止该任务。');
         const scan = await getFollowingScan();

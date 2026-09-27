@@ -2,6 +2,7 @@
 importScripts('core.js');
 importScripts('activity-service.js');
 importScripts('following-sync.js');
+importScripts('manual-unfollow-service.js');
 const core = globalThis.XReviewCore;
 const empty = () => ({schemaVersion: 1, records: [], thresholdDays: 180});
 let queue = Promise.resolve();
@@ -67,6 +68,7 @@ async function scanControl(message) {
   await reconcileScan(scan);
   scan = await enqueue(async () => {
     const existing = await getScan();
+    if (await manualUnfollow.busy()) throw Error('请先完成或停止取关窗口观察，再收集关注名单。');
     if ((await chrome.storage.local.get('activityRun')).activityRun?.phase === 'running') throw Error('正在检查账户主页，请先停止主页检查。');
     if (activeScan(existing)) throw Error(existing.tabId === message.tabId ? '当前页面正在采集，请勿重复开始。' : '另一个页面正在采集，请先回到那个页面停止。');
     const now = new Date().toISOString();
@@ -176,6 +178,7 @@ async function handle(message) {
       }
       await activity.cancelForClear();
       await followingSync.clearForReset();
+      await manualUnfollow.cancelForClear();
       break;
     }
     case 'OPEN': {
@@ -200,13 +203,17 @@ async function handle(message) {
   await chrome.storage.local.set({reviewData: data});
   return data;
 }
-const activity = createActivityService({core, enqueue, load, getFollowingScan: getScan, reconcileFollowingScan: reconcileScan});
+const manualUnfollow = createManualUnfollowService({core, enqueue, load});
+const activity = createActivityService({core, enqueue, load, getFollowingScan: getScan, reconcileFollowingScan: reconcileScan, manualUnfollowBusy: manualUnfollow.busy});
 const followingSync = createFollowingSyncService({core, enqueue, load, getScan});
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return false;
   let operation;
-  if (['SCAN_BATCH', 'SCAN_PROGRESS'].includes(message.type)) operation = enqueue(() => scanMessage(message, sender));
+  if (message.type === 'UNFOLLOW_WATCH_STOPPED') operation = manualUnfollow.watchStopped(message, sender);
+  else if (message.type === 'UNFOLLOW_OBSERVED') operation = manualUnfollow.observed(message, sender);
+  else if (['SCAN_BATCH', 'SCAN_PROGRESS'].includes(message.type)) operation = enqueue(() => scanMessage(message, sender));
   else if (!sender.url?.startsWith(chrome.runtime.getURL(''))) operation = Promise.reject(Error('此操作须从扩展工作台发起'));
+  else if (String(message.type).startsWith('UNFOLLOW_')) operation = manualUnfollow.handle(message);
   else if (String(message.type).startsWith('ACT_')) operation = activity.handle(message, sender);
   else if (String(message.type).startsWith('SYNC_')) operation = followingSync.handle(message, sender);
   else if (['SCAN_BEGIN', 'SCAN_STATUS', 'SCAN_STOP'].includes(message.type)) operation = scanControl(message);
@@ -219,9 +226,15 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   const scan = await getScan();
   if (scan?.tabId === tabId) await stopStored(scan.runId, '采集页面已关闭，已保存的账户会保留。', 'tab-closed');
   await activity.tabRemoved(tabId);
+  await manualUnfollow.tabRemoved(tabId);
 });
 chrome.runtime.onStartup.addListener(async () => {
   const scan = await getScan();
   if (activeScan(scan)) await stopStored(scan.runId, '浏览器已重启，请重新开始采集。', 'restart');
   await activity.startup();
+  await manualUnfollow.startup();
+});
+
+chrome.tabs.onUpdated?.addListener((tabId, change, tab) => {
+  void manualUnfollow.tabUpdated(tabId, change, tab).catch(() => {});
 });
