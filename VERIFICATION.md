@@ -1,12 +1,22 @@
 # Verification record
 
-Target version: 1.6.1. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.2. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.2 manual-unfollow recovery
+
+The watcher previously discarded a trusted manual action whenever profile controls briefly became unreadable, which could leave a stale local record after X had already completed the unfollow. It now distinguishes temporary missing elements from contradictory identity evidence, permits a missing-element gap of up to five seconds, and restarts the full two-second stability check on recovery. Conflicting identity, cancellation and an expired gap retain the record with a visible explanation. A rendered signed-in profile link outside the viewport can still identify the viewer. Disabled or busy profile controls cannot establish follow-state evidence; the full stability interval restarts after they become ready.
+
+A separate reconciliation path handles a profile that is already not followed when its window opens, including an action completed during the initial monitoring handshake. It verifies the same profile, numeric ID and signed-in viewer in a stable Follow state. The background requires a non-empty stored following-list owner matching that viewer, the unchanged record fingerprint, current permission and two fresh page probes before the atomic local removal and undo save. This path reports a current-state synchronisation, not a newly observed manual unfollow. Unknown-owner imports and conflicting ownership remain retained.
+
+All 108 included Node.js tests and root JavaScript syntax checks passed. New coverage comprises 27 watcher state-machine tests and 12 background reconciliation tests, including cancellation, synthetic events, timing boundaries, viewer and target changes, ownership checks, current-document checks, repeated proof validation, concurrent record changes, storage failure and local undo. Five local browser fixture scenarios passed: delayed control replacement after confirmation, initially not followed, state change during the initial handshake, contradictory numeric identity, and a retained backend response for an unknown-owner record. Browser fixtures ran the production watcher with a scoped fictional X URL and mocked extension acknowledgements; they do not exercise the installed extension service worker.
+
+The user reported that X had changed its button to Follow while the extension retained the record. The exact missed event in that earlier window was not captured. A read-only check confirmed the current native profile selectors without clicking any real follow or unfollow control. Regression fixtures use fictional accounts; they do not prove a successful end-to-end action on the user's real account.
 
 ## Version 1.6.1 following-list identity fix
 

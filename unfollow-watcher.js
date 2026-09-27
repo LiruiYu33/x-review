@@ -5,32 +5,39 @@
   const PANEL_ID = 'x-review-unfollow-panel';
   const EXCLUDED = 'article,[data-testid="tweet"],[data-testid="UserCell"],aside,nav,[role="navigation"],[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
   const DIALOGS = '[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
-  const STABLE_MS = 2000, INTENT_MS = 30000, MAX_MS = 10 * 60 * 1000;
+  const STABLE_MS = 2000, TRANSIENT_MS = 5000, INTENT_MS = 30000, MAX_MS = 10 * 60 * 1000;
   const t = value => globalThis.XReviewI18n?.t(value) ?? value;
   const handleOf = value => /^[A-Za-z0-9_]{1,15}$/.test(value || '') ? value.toLowerCase() : '';
   const idOf = value => /^\d+$/.test(value || '') ? String(value) : '';
   let current = null;
 
-  function visible(node) {
+  function rendered(node) {
     if (!node || node.closest('[hidden],[aria-hidden="true"]')) return false;
     const style = getComputedStyle(node), rect = node.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0
-      && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+      && rect.width > 0 && rect.height > 0;
+  }
+  function visible(node) {
+    if (!rendered(node)) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
   }
   const textOf = node => String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim();
   function route() {
     if (location.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(location.hostname) || location.port) return '';
     return handleOf(location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]);
   }
-  function viewer() {
-    const handles = [...document.querySelectorAll('[data-testid="AppTabBar_Profile_Link"]')].filter(visible).map(node => {
+  function viewerEvidence() {
+    const handles = [...document.querySelectorAll('[data-testid="AppTabBar_Profile_Link"]')].filter(rendered).map(node => {
       try {
         const url = new URL(node.getAttribute('href'), location.origin);
         return url.origin === location.origin ? handleOf(url.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]) : '';
       } catch { return ''; }
     }).filter(Boolean);
-    return new Set(handles).size === 1 ? handles[0] : '';
+    const identities = new Set(handles);
+    return {handle: identities.size === 1 ? handles[0] : '', conflict: identities.size > 1};
   }
+  const viewer = () => viewerEvidence().handle;
   function blocked() {
     if ([...document.querySelectorAll('[data-testid="LoginForm_Login_Button"],input[autocomplete="current-password"],iframe[src*="arkoselabs"],iframe[title*="challenge" i]')].some(visible)) return true;
     const indicators = [...document.querySelectorAll('main [role="alert"],main [data-testid="error-detail"],main [data-testid="retry"],[data-testid="toast"]')]
@@ -38,17 +45,19 @@
     return indicators.some(node => /error|went wrong|unable|failed|try again|rate limit|too many requests|limit reached|sign in|log in|verify|出错|错误|錯誤|失败|失敗|重试|重試|稍后|稍後|登录|登入|验证|驗證|限制|频繁|頻繁/i.test(textOf(node)));
   }
   function read(run) {
-    const handle = route(), owner = viewer();
-    const unknown = {handle, id: '', viewer: owner, state: 'unknown', button: null};
-    if (!handle || !owner || blocked() || (run.targetHandle && handle !== run.targetHandle)
-      || (run.handle && handle !== run.handle) || (run.viewer && owner !== run.viewer)) return unknown;
+    const handle = route(), identity = viewerEvidence(), owner = identity.handle;
+    const unknown = {handle, id: '', viewer: owner, state: 'unknown', button: null, conflict: false};
+    const conflict = {...unknown, conflict: true};
+    if (identity.conflict || (handle && run.targetHandle && handle !== run.targetHandle)
+      || (handle && run.handle && handle !== run.handle) || (owner && run.viewer && owner !== run.viewer)) return conflict;
+    if (!handle || blocked()) return unknown;
     const root = document.querySelector('main [data-testid="primaryColumn"],main[data-testid="primaryColumn"],main');
     if (!root) return unknown;
     const names = [...root.querySelectorAll('[data-testid="UserName"]')].filter(node => !node.closest(EXCLUDED) && visible(node));
     // A single visible profile identity prevents recommendation or stale-page attribution.
-    if (names.length !== 1) return unknown;
+    if (names.length !== 1) return names.length > 1 ? conflict : unknown;
     const namedHandles = new Set([...textOf(names[0]).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
-    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return unknown;
+    if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict : unknown;
     const name = names[0], boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
     const buttons = [...root.querySelectorAll('[data-testid$="-unfollow"],[data-testid$="-follow"]')].filter(node => {
       if (!visible(node) || node.closest(EXCLUDED) || !node.matches('button,[role="button"]')) return false;
@@ -56,9 +65,14 @@
       const rect = node.getBoundingClientRect(), nameRect = name.getBoundingClientRect();
       return Math.abs(rect.top - nameRect.top) < 600;
     });
-    if (buttons.length !== 1) return unknown;
+    if (buttons.length !== 1) return buttons.length > 1 ? conflict : unknown;
+    // A native request still in progress cannot establish a stable follow state.
+    if (buttons[0].getAttribute('disabled') !== null || buttons[0].getAttribute('aria-disabled') === 'true'
+      || buttons[0].getAttribute('aria-busy') === 'true') return unknown;
     const match = buttons[0].getAttribute('data-testid').match(/^(\d+)-(unfollow|follow)$/);
-    if (!match || (run.targetId && match[1] !== run.targetId) || (run.id && match[1] !== run.id)) return unknown;
+    if (!match) return unknown;
+    if ((run.targetId && match[1] !== run.targetId) || (run.id && match[1] !== run.id)) return conflict;
+    if (!owner) return unknown;
     return {handle, id: match[1], viewer: owner, state: match[2] === 'unfollow' ? 'following' : 'follow', button: buttons[0]};
   }
   function dialogs() { return [...document.querySelectorAll(DIALOGS)].filter(visible); }
@@ -71,14 +85,25 @@
     return run ? {runId: run.runId, handle: run.handle || run.targetHandle, id: run.id || run.targetId, viewer: run.viewer || '', phase: run.phase, reason: run.reason}
       : {phase: 'idle', reason: ''};
   }
-  function clearIntent(run) { run.intent = null; run.followSince = 0; }
+  function clearIntent(run) { run.intent = null; run.followSince = 0; run.unknownSince = 0; }
+  function resetReconciliation(run) { run.reconcileSince = 0; }
+  function trustedIntent(run) {
+    return Boolean(run.intent && Date.now() - run.intent.at <= INTENT_MS
+      && (!run.intent.dialogSeen || run.intent.confirmed));
+  }
   function verify() {
     const run = current;
     if (!run) return {state: 'unknown', trustedAction: false, stableFor: 0};
-    const state = read(run), eligible = active(run) && state.state === 'follow' && !document.hidden && !dialogs().length
-      && run.armed && run.intent && Date.now() - run.intent.at <= INTENT_MS && (!run.intent.dialogSeen || run.intent.confirmed);
+    const state = read(run);
+    if (state.conflict) { clearIntent(run); run.identityConflict = true; }
+    const observable = active(run) && !run.identityConflict && state.state === 'follow' && !document.hidden && !dialogs().length;
+    if (!observable) { run.followSince = 0; resetReconciliation(run); }
+    const eligible = observable && run.armed && trustedIntent(run) && !run.unknownSince;
+    const reconcile = observable && !run.armed && run.reconcileSince > 0;
     return {runId: run.runId, handle: state.handle, id: state.id, viewer: state.viewer, state: state.state,
-      trustedAction: Boolean(eligible), stableFor: eligible && run.followSince ? Math.max(0, Date.now() - run.followSince) : 0};
+      observationKind: reconcile ? 'already-not-following' : 'manual-unfollow', trustedAction: Boolean(eligible),
+      stableFor: eligible && run.followSince ? Math.max(0, Date.now() - run.followSince)
+        : reconcile ? Math.max(0, Date.now() - run.reconcileSince) : 0};
   }
   function detach(run) {
     clearInterval(run.timer); run.observer?.disconnect(); document.removeEventListener('click', run.onClick, true);
@@ -98,8 +123,8 @@
     host.setAttribute('aria-label', t('X Review 手动取消关注'));
     title.textContent = t('X Review · 手动取消关注');
     status.textContent = t(run.reason);
-    detail.textContent = t('请在 X 原生页面亲自点击“正在关注”，再确认取消关注。检测成功后，本地记录会自动移除。关闭窗口或取消操作不会删除本地记录。');
-    detail.hidden = ['removed', 'retained'].includes(run.phase);
+    detail.textContent = t('等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。');
+    detail.hidden = ['removed', 'retained'].includes(run.phase) || run.reconcileSince > 0;
     close.textContent = t(active(run) ? '停止检测' : '关闭提示');
   }
   function createPanel(run) {
@@ -131,7 +156,7 @@
     const dialog = button?.closest(DIALOGS);
     if (dialog) {
       const owner = viewer();
-      if (!run.intent || Date.now() - run.intent.at > INTENT_MS || route() !== run.handle || (owner && owner !== run.viewer) || blocked()) { clearIntent(run); return; }
+      if (!run.intent || Date.now() - run.intent.at > INTENT_MS || route() !== run.handle || viewerEvidence().conflict || (owner && owner !== run.viewer) || blocked()) { clearIntent(run); return; }
       // Native modals may aria-hide the background header and navigation. The
       // preceding trusted header click already bound the target and viewer.
       if (button.matches('[data-testid="confirmationSheetConfirm"]') && visible(button) && expectedDialog(run, dialog)) {
@@ -142,46 +167,87 @@
       return;
     }
     const state = read(run);
-    if (state.state === 'unknown') { clearIntent(run); return; }
+    if (state.state === 'unknown') {
+      clearIntent(run);
+      if (state.conflict) end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+      return;
+    }
     if (button === state.button && state.state === 'following' && !dialogs().length) {
-      run.intent = {at: Date.now(), dialogSeen: false, confirmed: false}; run.followSince = 0;
+      run.intent = {at: Date.now(), dialogSeen: false, confirmed: false}; run.followSince = 0; run.unknownSince = 0;
       run.reason = '等待你完成 X 的取消关注操作…'; render(run); return;
     }
   }
   async function tick(run) {
     if (!active(run) || run.busy) return;
+    if (run.identityConflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
     if (Date.now() - run.startedAt > MAX_MS) return end(run, 'stopped', '检测已超时，本地记录未删除。请从工作台重新打开。');
     if (run.handle && route() !== run.handle) return end(run, 'stopped', '已离开目标账户主页，本地记录未删除。');
     const owner = viewer();
+    if (viewerEvidence().conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
     if (run.viewer && owner && owner !== run.viewer) return end(run, 'stopped', '当前登录账户已改变，本地记录未删除。');
     if (blocked()) return end(run, 'stopped', 'X 显示登录、验证或错误提示，本地记录未删除。');
-    if (document.hidden) { run.followSince = 0; return; }
+    if (document.hidden) { run.followSince = 0; resetReconciliation(run); return; }
     if (run.intent && Date.now() - run.intent.at > INTENT_MS) clearIntent(run);
     const openDialogs = dialogs();
     if (openDialogs.length) {
-      run.followSince = 0;
+      run.followSince = 0; resetReconciliation(run);
       if (run.intent && openDialogs.every(dialog => expectedDialog(run, dialog))) run.intent.dialogSeen = true;
       else clearIntent(run);
       return;
     }
     const state = read(run);
     if (state.state === 'unknown') {
-      clearIntent(run);
+      run.followSince = 0; resetReconciliation(run);
+      if (state.conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+      // X may briefly remove its profile controls while applying the native action.
+      // Missing elements pause evidence; contradictory identities invalidate it.
+      if (run.armed && trustedIntent(run)) {
+        if (!run.unknownSince) run.unknownSince = Date.now();
+        if (Date.now() - run.unknownSince >= TRANSIENT_MS) {
+          clearIntent(run);
+          return end(run, 'stopped', '取消关注后页面状态持续无法识别，本地记录已保留。请从工作台重新打开以核实当前状态。');
+        }
+      } else clearIntent(run);
       if (!run.armed && Date.now() - run.startedAt > 25000) return end(run, 'stopped', '未能识别账户主页或关注状态，本地记录已保留。请从工作台重新打开。');
       run.reason = '等待可识别的账户主页、登录账户和关注按钮；尚未删除本地记录。'; render(run); return;
     }
+    if (run.unknownSince && Date.now() - run.unknownSince >= TRANSIENT_MS) {
+      clearIntent(run);
+      return end(run, 'stopped', '取消关注后页面状态持续无法识别，本地记录已保留。请从工作台重新打开以核实当前状态。');
+    }
+    run.unknownSince = 0;
     if (!run.armed) {
-      if (state.state !== 'following') {
-        return end(run, 'stopped', '页面未显示“正在关注”，无法证明本次发生了取消关注；本地记录保留。');
+      // Pin identity before either initial-state reconciliation or the async arm
+      // handshake. A later mismatch must never restart under a different identity.
+      run.handle = state.handle; run.id = state.id; run.viewer = state.viewer;
+      if (state.state === 'follow') {
+        if (!run.reconcileSince) run.reconcileSince = Date.now();
+        run.reason = '页面显示已未关注，正在核实账户身份并同步本地记录…'; render(run);
+        if (Date.now() - run.reconcileSince < STABLE_MS || Date.now() < run.retryAt) return;
+        run.busy = true; run.phase = 'verifying';
+        try {
+          const data = await report(run, 'reconcile');
+          if (!active(run)) return;
+          if (data.phase === 'removed') end(run, 'removed', data.reason || '已核实当前未关注，本地记录已移除。现在可以关闭窗口。');
+          else if (['retained', 'cancelled', 'failed'].includes(data.phase)) end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '本地记录未删除，请回到工作台检查。');
+          else throw new Error('扩展尚未确认保存，本地删除结果未知。');
+        } catch (error) {
+          if (active(run)) { resetReconciliation(run); run.phase = 'watching'; run.reason = '尚未确认本地更新：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
+        } finally { run.busy = false; }
+        return;
       }
-      if (dialogs().length || Date.now() < run.retryAt) return;
-      run.handle = state.handle; run.id = state.id; run.viewer = state.viewer; run.busy = true;
+      resetReconciliation(run);
+      if (Date.now() < run.retryAt) return;
+      run.busy = true;
       try {
         const data = await report(run, 'following');
         if (!active(run)) return;
         if (data.phase !== 'armed') return end(run, data.phase === 'retained' ? 'retained' : 'failed', data.reason || '检测未能开始，本地记录未删除。');
         const fresh = read(run);
-        if (fresh.state !== 'following' || dialogs().length) return end(run, 'stopped', '关注状态在检测准备期间发生变化，请从工作台重新打开。');
+        if (fresh.conflict) return end(run, 'stopped', '账户身份发生变化或存在冲突，本地记录未删除。');
+        if (fresh.state !== 'following' || document.hidden || dialogs().length) {
+          run.phase = 'watching'; run.reason = '关注状态在检测准备期间发生变化，正在重新核实当前状态…'; render(run); return;
+        }
         run.armed = true; run.phase = 'armed'; run.reason = '检测已就绪，请在 X 页面手动取消关注。'; render(run);
       } catch (error) {
         if (active(run)) { run.reason = '检测未能开始：' + error.message; run.retryAt = Date.now() + 3000; render(run); }
@@ -195,7 +261,10 @@
       }
       return;
     }
-    if (!run.intent || (run.intent.dialogSeen && !run.intent.confirmed)) { run.followSince = 0; return; }
+    if (!trustedIntent(run)) {
+      clearIntent(run);
+      return end(run, 'stopped', '页面已显示未关注，但未能完整确认本次操作。本地记录已保留；请从工作台重新打开以核实当前状态。');
+    }
     if (!run.followSince) run.followSince = Date.now();
     if (Date.now() - run.followSince < STABLE_MS || Date.now() < run.retryAt) return;
     run.busy = true; run.phase = 'verifying'; run.reason = '已观察到取消关注，正在确认并更新本地记录…'; render(run);
@@ -215,15 +284,15 @@
     if (!options.runId || (!targetHandle && !targetId)) throw new Error('缺少有效的取消关注检测目标。');
     await globalThis.XReviewI18n?.ready;
     const run = {runId: String(options.runId), targetHandle, targetId, handle: '', id: '', viewer: '', phase: 'watching',
-      reason: '正在准备取消关注检测…', startedAt: Date.now(), armed: false, intent: null, followSince: 0, retryAt: 0, busy: false};
+      reason: '正在准备取消关注检测…', startedAt: Date.now(), armed: false, intent: null, followSince: 0, unknownSince: 0, reconcileSince: 0, retryAt: 0, busy: false};
     current = run; createPanel(run);
     run.onClick = event => clicked(run, event);
-    run.onVisibility = () => { run.followSince = 0; };
+    run.onVisibility = () => { run.followSince = 0; resetReconciliation(run); };
     run.onPageHide = () => { if (active(run)) end(run, 'stopped', '页面已关闭或刷新，本地记录未删除。'); };
     document.addEventListener('click', run.onClick, true); document.addEventListener('visibilitychange', run.onVisibility); window.addEventListener('pagehide', run.onPageHide);
     // Mutation records may contain an entire React subtree. Re-read bounded header selectors only.
     run.observer = new MutationObserver(() => { void tick(run); });
-    run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'hidden', 'aria-hidden']});
+    run.observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'hidden', 'aria-hidden', 'disabled', 'aria-disabled', 'aria-busy']});
     run.timer = setInterval(() => { void tick(run); }, 250);
     await tick(run); return snapshot(run);
   }
