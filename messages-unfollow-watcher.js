@@ -3,7 +3,7 @@
   globalThis.XReviewI18n.register([
     ['X Review 手动取消关注', 'X Review manual unfollow'],
     ['X Review · 手动取消关注', 'X Review · Manual unfollow'],
-    ['等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开，直到显示核实结果。', 'Wait until monitoring is ready, then confirm Unfollow yourself on X. If you already do not follow this account, its identity and local ownership will be verified before synchronising the record. Keep this window open until verification finishes.'],
+    ['等待检测就绪后，在 X 原生页面亲自确认取消关注；若已未关注，将核实当前账户与本地记录后同步。请保持窗口打开；核实并保存本地更新后，窗口会自动关闭。', 'Wait until monitoring is ready, then confirm Unfollow yourself on X. If you already do not follow this account, its identity and local ownership will be verified before synchronising the record. Keep this window open; it closes automatically after verification and the local update are saved.'],
     ['停止检测', 'Stop monitoring'], ['关闭提示', 'Dismiss'],
     ['已停止检测，本地记录未删除。', 'Monitoring stopped. The local record was not removed.'],
     ['扩展尚未确认保存，本地删除结果未知。', 'The extension has not acknowledged the update. Local removal is unconfirmed.'],

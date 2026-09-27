@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.4. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.5. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.5 automatic popup closure
+
+After a verified manual unfollow or owner-bound current-state reconciliation, the background now waits for the atomic local removal and undo save before closing the monitored tab. Removing its sole tab closes the original popup. Closure runs outside the shared write queue, so the tab-removed event cannot deadlock persistence, and that event cannot change an already completed result to cancelled. No new permission is required.
+
+The close operation requires the same completed run, original tab and window, and the same fully loaded profile with no pending navigation. Moved or navigated tabs are left open; additional tabs in the popup are not removed. A changed run or local undo aborts closure. Browser closure errors leave the saved removal and undo intact. Retained, cancelled, unverified and failed-save outcomes do not close the tab.
+
+All 168 Node.js tests and root JavaScript syntax checks passed, including 20 new closure cases covering save-before-close ordering, both success paths, terminal failures, duplicate completion, close failures, tab movement and navigation, concurrent undo and replacement sessions. Tests exercise the actual background service and its message flow with mocked Chrome APIs. The installed-extension window-close behaviour on a signed-in X account has not been exercised end to end.
 
 ## Version 1.6.4 profile-loading feedback-loop fix
 
