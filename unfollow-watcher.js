@@ -5,7 +5,8 @@
   const PANEL_ID = 'x-review-unfollow-panel';
   const EXCLUDED = 'article,[data-testid="tweet"],[data-testid="UserCell"],aside,nav,[role="navigation"],[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
   const DIALOGS = '[role="dialog"],[role="alertdialog"],[data-testid="confirmationSheetDialog"]';
-  const STABLE_MS = 2000, TRANSIENT_MS = 5000, INTENT_MS = 30000, MAX_MS = 10 * 60 * 1000;
+  const MANUAL_STABLE_MS = 500, RECONCILE_STABLE_MS = 2000;
+  const TRANSIENT_MS = 5000, INTENT_MS = 30000, MAX_MS = 10 * 60 * 1000;
   const t = value => globalThis.XReviewI18n?.t(value) ?? value;
   const handleOf = value => /^[A-Za-z0-9_]{1,15}$/.test(value || '') ? value.toLowerCase() : '';
   const idOf = value => /^\d+$/.test(value || '') ? String(value) : '';
@@ -92,11 +93,13 @@
     if (names.length !== 1) return names.length > 1 ? conflict('页面显示多个账户标题，本地记录未删除。') : unknown;
     const namedHandles = new Set([...textOf(names[0]).matchAll(/(?:^|[^A-Za-z0-9_])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g)].map(match => match[1].toLowerCase()));
     if (namedHandles.size !== 1 || !namedHandles.has(handle)) return namedHandles.size ? conflict('账户标题与主页地址不一致，本地记录未删除。') : unknown;
-    const name = names[0], boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
+    const nameRect = names[0].getBoundingClientRect(), boundary = root.querySelector('[role="tablist"],article,[data-testid="tweet"]');
     const buttons = [...root.querySelectorAll('button,[role="button"]')].filter(node => {
-      if (!visible(node) || node.closest(EXCLUDED)) return false;
+      // Exclude timeline controls before asking the browser for their layout.
+      if (node.closest(EXCLUDED)) return false;
       if (boundary && !(node.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
-      const rect = node.getBoundingClientRect(), nameRect = name.getBoundingClientRect();
+      if (!visible(node)) return false;
+      const rect = node.getBoundingClientRect();
       return Math.abs(rect.top - nameRect.top) < 600;
     });
     const controls = buttons.map(button => controlEvidence(button, handle));
@@ -231,8 +234,8 @@
     if (run.identityConflict) return end(run, 'stopped', run.identityConflictReason || '账户身份发生变化或存在冲突，本地记录未删除。');
     if (Date.now() - run.startedAt > MAX_MS) return end(run, 'stopped', '检测已超时，本地记录未删除。请从工作台重新打开。');
     if (run.handle && route() !== run.handle) return end(run, 'stopped', '已离开目标账户主页，本地记录未删除。');
-    const owner = viewer();
-    if (viewerEvidence().conflict) return end(run, 'stopped', '登录账户证据不一致，本地记录未删除。');
+    const identity = viewerEvidence(), owner = identity.handle;
+    if (identity.conflict) return end(run, 'stopped', '登录账户证据不一致，本地记录未删除。');
     if (run.viewer && owner && owner !== run.viewer) return end(run, 'stopped', '当前登录账户已改变，本地记录未删除。');
     if (blocked()) return end(run, 'stopped', 'X 显示登录、验证或错误提示，本地记录未删除。');
     if (document.hidden) { run.followSince = 0; resetReconciliation(run); return; }
@@ -272,7 +275,7 @@
       if (state.state === 'follow') {
         if (!run.reconcileSince) run.reconcileSince = Date.now();
         run.reason = '页面显示已未关注，正在核实账户身份并同步本地记录…'; render(run);
-        if (Date.now() - run.reconcileSince < STABLE_MS || Date.now() < run.retryAt) return;
+        if (Date.now() - run.reconcileSince < RECONCILE_STABLE_MS || Date.now() < run.retryAt) return;
         run.busy = true; run.phase = 'verifying';
         try {
           const data = await report(run, 'reconcile');
@@ -304,9 +307,12 @@
       return;
     }
     if (state.state === 'following') {
+      const wasVerifying = run.followSince > 0;
       run.followSince = 0;
       if (run.intent?.dialogSeen && !run.intent.confirmed) {
         clearIntent(run); run.reason = '操作已取消，本地记录保留。你可以再次手动取消关注。'; render(run);
+      } else if (wasVerifying) {
+        run.reason = '页面恢复为正在关注，本地记录未删除。请在 X 页面核实取关结果。'; render(run);
       }
       return;
     }
@@ -314,8 +320,11 @@
       clearIntent(run);
       return end(run, 'stopped', '页面已显示未关注，但未能完整确认本次操作。本地记录已保留；请从工作台重新打开以核实当前状态。');
     }
-    if (!run.followSince) run.followSince = Date.now();
-    if (Date.now() - run.followSince < STABLE_MS || Date.now() < run.retryAt) return;
+    if (!run.followSince) {
+      run.followSince = Date.now();
+      run.reason = '已观察到取消关注，正在确认并更新本地记录…'; render(run);
+    }
+    if (Date.now() - run.followSince < MANUAL_STABLE_MS || Date.now() < run.retryAt) return;
     run.busy = true; run.phase = 'verifying'; run.reason = '已观察到取消关注，正在确认并更新本地记录…'; render(run);
     try {
       const data = await report(run, 'confirmed');

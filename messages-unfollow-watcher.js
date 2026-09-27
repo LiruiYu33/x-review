@@ -35,6 +35,7 @@
     ['检测已就绪，请在 X 页面手动取消关注。', 'Monitoring is ready. Manually unfollow on the X page.'],
     ['检测未能开始：{detail}', 'Monitoring could not start: {detail}'],
     ['已观察到取消关注，正在确认并更新本地记录…', 'Unfollowing was observed. Verifying and updating the local record…'],
+    ['页面恢复为正在关注，本地记录未删除。请在 X 页面核实取关结果。', 'The page shows Following again. The local record was not removed. Check the result on X.'],
     ['已确认取消关注，本地记录已移除。现在可以关闭窗口。', 'Unfollowing was verified and the local record was removed. You can close this window.'],
     ['本地记录未删除，请回到工作台检查。', 'The local record was not removed. Check it in the workspace.'],
     ['尚未确认本地更新：{detail}', 'The local update is not yet confirmed: {detail}'],

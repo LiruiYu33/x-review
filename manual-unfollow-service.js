@@ -6,6 +6,7 @@
   'use strict';
   root.createManualUnfollowService = function ({core, enqueue, load}) {
     const KEY = 'manualUnfollow', UNDO = 'manualUnfollowUndo';
+    const MANUAL_STABLE_MS = 500, RECONCILE_STABLE_MS = 2000;
     const MAX_MS = 10 * 60 * 1000;
     const attaching = new Set(), closing = new Set();
     const active = run => run && ['opening', 'watching', 'armed'].includes(run.phase);
@@ -166,8 +167,8 @@
         const [probe] = await chrome.scripting.executeScript({target: {tabId: initial.tabId, documentIds: [sender.documentId]}, func: () => globalThis.XReviewUnfollowWatcher?.verify() || null});
         const proof = probe?.result;
         if (probe?.documentId !== sender.documentId || !proof || proof.runId !== initial.runId || proof.id !== message.id || !sameHandle(proof.handle, message.handle) || !sameHandle(proof.viewer, message.viewer) || proof.state !== (message.phase === 'following' ? 'following' : 'follow')) throw Error('无法再次确认取关页面状态，本地记录已保留。');
-        if (message.phase === 'confirmed' && (proof.trustedAction !== true || !Number.isFinite(proof.stableFor) || proof.stableFor < 2000)) throw Error('尚未确认手动取关后的稳定状态，本地记录已保留。');
-        if (message.phase === 'reconcile' && (proof.observationKind !== 'already-not-following' || proof.trustedAction !== false || !Number.isFinite(proof.stableFor) || proof.stableFor < 2000)) throw Error('尚未确认当前未关注此账号的稳定状态，本地记录已保留。');
+        if (message.phase === 'confirmed' && (proof.trustedAction !== true || !Number.isFinite(proof.stableFor) || proof.stableFor < MANUAL_STABLE_MS)) throw Error('尚未确认手动取关后的稳定状态，本地记录已保留。');
+        if (message.phase === 'reconcile' && (proof.observationKind !== 'already-not-following' || proof.trustedAction !== false || !Number.isFinite(proof.stableFor) || proof.stableFor < RECONCILE_STABLE_MS)) throw Error('尚未确认当前未关注此账号的稳定状态，本地记录已保留。');
         const latest = await get();
         if (!latest || latest.runId !== initial.runId || !fresh(latest)) throw Error('取关观察会话已失效。');
         if (!await permission()) throw Error('X 页面读取权限已撤销，本地记录已保留。');

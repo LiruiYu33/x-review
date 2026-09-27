@@ -371,3 +371,42 @@ test('overlapping successful completion handlers close the popup only once',{tim
   assert.equal(h.stored.manualUnfollow.phase,'removed');
   assert.equal(h.stored.manualUnfollowUndo.record.key,h.original.key);
 });
+
+
+for(const stableFor of [499,500]){
+  test('trusted manual evidence at '+stableFor+' milliseconds '+(stableFor===500?'can commit':'must retain')+' the local record',{timeout:2000},async()=>{
+    const h=harness();await h.begin();await h.observe('following');
+    h.mutateProof(()=>{h.proof().stableFor=stableFor;});
+    const done=await h.observe('confirmed');
+    assert.equal(done.ok,stableFor===500);
+    assert.equal(hasTarget(h),stableFor!==500);
+    assert.equal(h.closes.length,stableFor===500?1:0);
+    if(stableFor===500){
+      assert.equal(done.data.phase,'removed');
+      assert.equal(h.stored.manualUnfollowUndo.record.key,h.original.key);
+    }else assert.equal(h.stored.manualUnfollowUndo,undefined);
+  });
+}
+
+test('500-millisecond manual evidence is probed again and rejected if X has returned to Following',{timeout:2000},async()=>{
+  const h=harness();await h.begin();await h.observe('following');
+  let reads=0;
+  h.mutateProof(()=>{
+    h.proof().stableFor=500;
+    if(++reads===2)Object.assign(h.proof(),{state:'following',stableFor:0});
+  });
+  assert.equal((await h.observe('confirmed')).ok,false);
+  assert.equal(reads,2);assert.equal(hasTarget(h),true);
+  assert.equal(h.closes.length,0);assert.equal(h.stored.manualUnfollowUndo,undefined);
+});
+
+for(const stableFor of [500,1999,2000]){
+  test('initial reconciliation at '+stableFor+' milliseconds retains its separate two-second requirement',{timeout:2000},async()=>{
+    const h=harness();await h.begin();
+    h.mutateProof(()=>{h.proof().stableFor=stableFor;});
+    const done=await h.observe('reconcile');
+    assert.equal(done.ok,stableFor===2000);
+    assert.equal(hasTarget(h),stableFor!==2000);
+    assert.equal(h.closes.length,stableFor===2000?1:0);
+  });
+}
