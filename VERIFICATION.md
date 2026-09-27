@@ -1,12 +1,20 @@
 # Verification record
 
-Target version: 1.6.11. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
+Target version: 1.6.12. Record date: 27 September 2026. Minimum Chrome/Chromium version: 116.
 
 ## Scope
 
 The 1.6.0 update adds a per-account Unfollow action that opens a separate native X window. The user performs the unfollow; a page observer verifies the following-to-not-following transition before removing the unchanged local record. A separate undo restores local records only. English and Simplified Chinese remain available with a saved preference, and existing collection, post-date checking, and scan-cleanup behaviour is retained. Updating the extension files does not directly change the records already stored in a user's browser. Reload the extension and refresh X pages to run the updated code.
 
 The historical validation below uses local sample data and isolated browser fixtures. Version 1.6.1 additionally includes a limited, read-only inspection of a signed-in X Following page to confirm the reported identity-parsing issue. No follow or unfollow action was performed during that inspection. A physical Edge installation and the complete updated extension workflow on signed-in X have not been validated. Fixture success does not prove that every X page layout, loading behaviour, or language is supported.
+
+## Version 1.6.12 navigation loading and document continuity
+
+The 1.6.11 route change still cancelled an armed manual-unfollow session on every `tabs.onUpdated` loading event. The user observed this exact cancellation while switching between the selected account’s profile tabs. A loading status alone cannot distinguish that navigation from a full document replacement.
+
+The service now treats loading as provisional. It still rejects a URL outside the selected account’s supported profile tabs immediately. When Chrome reports completion, it probes the current main frame with the existing `scripting` permission and compares its document ID, watcher session and bound account against the armed run. A matching document continues observation; a different document cancels the run without deleting the local record. Another same-account navigation already pending, or a temporarily unavailable probe, defers the decision; existing proof checks prevent removal while the tab is navigating. The existing fresh document-bound Follow checks, atomic removal and undo save, and save-before-close behaviour remain in place. Chrome has exposed the injection result’s document ID since version 106; the extension’s minimum remains 116.
+
+All 287 included Node.js tests and root JavaScript syntax checks passed. Regression tests model combined and separate loading/URL/complete events for the four profile tabs, rapid successive same-account navigations, a genuine document replacement, and navigation away during provisional loading. They also verify that local removal and window closure occur only after current evidence is accepted. No signed-in end-to-end unfollow was performed.
 
 ## Version 1.6.11 same-account profile tabs
 
